@@ -439,7 +439,7 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
 <body>
 
 <div id="header">
-  <h1>LEARNS v0.0009</h1>
+  <h1>LEARNS v0.0010</h1>
   <span class="sub">Logical Entropic Arrow Recursive Neuro-Symbolic — ConsciousNode SoftWorks</span>
   <div id="token-pill" style="display:flex;align-items:center;gap:12px;font-size:11px;color:var(--text-dim);margin-left:16px;flex-wrap:wrap;"><span>PARAMS <b id="tc-params">—</b></span><span>CORPUS <b id="tc-corpus">0</b></span><span>TRN <b id="tc-trntps">—</b> tok/s</span><span>IN <b id="tc-in">0</b></span><span>OUT <b id="tc-out">0</b></span><span>INF <b id="tc-inftps">—</b> tok/s</span><span>CTX <b id="tc-ctx">0</b></span></div>
   <div class="status-pill">
@@ -2413,7 +2413,7 @@ function exportModel(silent=false) {
   const a = document.createElement('a');
   a.href = url;
   const exportName = document.getElementById('cfg-export-name').value.trim();
-  const baseName = exportName || 'learns-v0.0009';
+  const baseName = exportName || 'learns-v0.0010';
   a.download = `${baseName}-step${App.step}.learns`;
   if (!silent) a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
