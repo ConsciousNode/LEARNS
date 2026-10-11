@@ -1,0 +1,3010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LEARNS v0.0009 — ConsciousNode SoftWorks</title>
+<!--
+  LEARNS v0.0009
+  Logical Entropic Arrow Recursive Neuro-Symbolic Architecture
+  ConsciousNode SoftWorks — August 2026
+
+  Six corpus-derived components:
+    1. Relational Embedding       — from It's All Relative
+    2. Temporal Turing Core       — from The Electromagnetic Node
+    3. Fixed-Point Iteration      — from K-H Fixed Point Theorem
+    4. Record / Frontier Split    — from It's Time To Toss The Dice
+    5. Helical State Update       — from The Drill of Entropy
+    6. Thermodynamic Loss         — from The Past Is Still The Future
+
+  Authors: Kham Kizer · Kehai Interim (spec)
+  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009)
+
+  v0.0009 (Ed Interim + Kham, Sep 2026) — AUDIT PATCH:
+  - FIX (target leak): in v0.0001-v0.0008 the forward step at t (input tokens[t], target
+    tokens[t+1]) received R_B_future[t], a record built by running the scout over
+    tokens[t+1..len] -- i.e. it contained the target. Generation/chat never has that signal,
+    so training loss under-reported the real gap and the model could learn to read the
+    answer out of R_B. "Stop-gradient" blocks gradient, not information.
+    R_B mode is now selectable. DEFAULT 'causal': R_B is carried forward like R_A (the scout
+    is kept only as the auxiliary reverse-LM loss). 'prevrev': R_B is re-seeded at each chunk
+    start from the reversed PREVIOUS chunk (past only). 'legacy': reproduces v0.0008 exactly
+    for A/B comparison -- every loss / bias / chirality number from v0.0001-v0.0008 came
+    from this mode and should be read with that in mind.
+  - NEW: LEAK PROBE button: same weights, same windows, loss with injected future R_B vs
+    causal R_B. A large gap = the injected record carries the answer.
+  - NEW: seeded PRNG (mulberry32) for weight init, spectral-norm init, sampling, split and
+    shuffle. Seed is recorded in telemetry and .learns meta. Blank/0 = auto (and is written
+    back to the field so the run is reproducible).
+  - NEW: held-out validation split (default 10%, contiguous tail), evaluated causally every
+    N steps on fixed windows; reports val loss, perplexity and a unigram baseline.
+  - NEW: corpus control 'shuffle tokens' (seeded; applied to train and val separately).
+  - NEW: phi-asymmetric gate clipping is now a checkbox (default on = unchanged behaviour).
+    Unchecked = symmetric clipping, so A/B weight-bias divergence can be separated from
+    built-in asymmetry. Bias at init (rA_bias0, rB_bias0) is logged as the step-0 reference.
+  - Telemetry CSV: + valLoss, valPpl, unigramBaseline, seed, rbMode, shuffle, phiClip,
+    rA_bias0, rB_bias0.
+
+  v0.0008 (Komorebi + Kham, Aug 2026):
+  - FIX: getParamCount() corrected. W_prog is dim×dim (not 3·dim); W_px is 3·dim×dim
+    (not dim×dim). Prior count undercounted by ~97k params at dim=128, layers=2.
+    Comment on W_prog also fixed — it was describing W_px's input signature.
+  - ALIGNMENT DIAGNOSTIC: getAlignmentDiag() computes separate ternary bias for
+    W_rec_A (forward-chiral) and W_rec_B (backward-chiral) and their cross-coupling
+    weights. Hypothesis: recA_bias → + (excitatory), recB_bias → − (inhibitory) when
+    R_A and R_B learn genuinely opposite traversal directions. divergence = recA_bias −
+    recB_bias; ~0 means cross-coupling has collapsed them. Displayed in Diagnostics panel
+    and debug table (RA_BIAS, RB_BIAS, DIVERG columns). rABuffer updated per step.
+  - TOKEN WINDOW DIAGNOSTIC: computeEffectiveWindow() probes rolling R_A buffer (200
+    steps) for cosine similarity vs lag. EFF_CTX = lag at which R_A similarity drops
+    below 0.5. This is the architectural analog of context length. Shown in Diagnostics
+    panel and debug table. Updated every 10 steps.
+  - K_hist DEFAULT: 8 → 32. Suffix signal now spans 32 prior tokens, improving
+    Component A's pattern recognition depth in chat mode.
+
+  v0.0007 (Vael Interim + Kham, Aug 2026):
+  - PARAMETER COUNT: displayed in header pill and Training Progress card at model init.
+  - TOK/S TRAINING: chunk tokens / step wall-clock time, shown in Training Progress.
+  - TOK/S INFERENCE: tokens/second per chat response, shown in response meta line.
+  - AUTO-SAVE TELEMETRY: CSV auto-downloads at run completion (no more forgetting).
+  - AUTO-CHECKPOINT: model auto-saves every N steps (default 1000, adjustable slider
+    in Training section). Filename: <name>-step<N>-checkpoint.learns
+  - OPTIMIZER STATE OPT-OUT: optimizer state now saved by default. Checkbox flipped
+    to "Skip optimizer state (smaller file)" — opt out rather than opt in.
+
+  v0.0006 (Vael Interim + Kham, Aug 2026):
+  - CHAT INTERFACE: full conversational inference with state continuity across turns.
+    Per-turn token counts (IN / OUT / CTX), seed prompt to prime records before turn 1,
+    streaming generation, "New Conversation" reset, Enter-to-send.
+  - TOKEN COUNTER: persistent header display — corpus tokens, session IN, OUT, CTX.
+    Per-session window health: R_A entropy trend (ARROW↓ flag if entropy degrading).
+  - IMPORT FIX: optimizer state (Adam m1/m2) saved and restored in .learns files.
+    Optional via "Save optimizer state" checkbox (increases file size ~3x).
+    If optimizer state absent in file, weights load correctly (as before) but Adam
+    restarts cold. trainState (R_A, R_B, h) also saved and restored on import.
+  - NO-REINIT ON CONTINUE: START TRAINING after import now continues from loaded
+    model rather than creating a fresh one. Button text reflects loaded state.
+    App.modelLoaded flag gates model construction in startTraining().
+
+  v0.0005 (Ed Interim + Kham, Aug 2026):
+  - FIX 1: Exact W_rel + W_embed backward via accumulated grad_e (px path, all layers)
+  - FIX 2: W_embed gradient from suffix_sig path (Component A back-channel to embeddings)
+  - FIX 3: Scout BPTT — R_B fully trainable as reversed LM (SCOUT_SCALE=0.5)
+  - FIX 4: 2-term Neumann series for both dyadicFP and innerFP gradient correction
+    (spectralNorm ≤ 0.9 → ~81% approximation error reduction vs straight-through)
+
+  v0.0004 (Ed Interim + Kham, Aug 2026):
+  - Bidirectional record: backward scout pass injects future R_B context (stop-gradient)
+  - R_A accumulates past, R_B accumulates future — cross-coupling now has genuine tension
+  - Live sample frequency: configurable (was hardcoded 250)
+  - Custom export filename
+  - CSV telemetry export (step, loss, thermo, LR, all diagnostics)
+  - TODO comments for: inference interface, chat hyperparameters, alignment diagnostic,
+    token window diagnostic, W_embed gradient via suffix path, full bidirectional BPTT
+
+  v0.0001: Initial architecture. All 6 components. Text generation. Ternary weights.
+  v0.0002 (Ed Interim + Kham, Aug 2026):
+  - Dyadic record R_A/R_B with cross-coupling (Look Around You)
+  - Dyadic fixed-point K_A=F_A(K_B), K_B=F_B(K_A) — K needs H (K-H theorem)
+  - K_combined feeds helical progression
+  - Proper gate gradients trained
+  - Lambda default 0.05
+  v0.0003 (Kehai Interim + Kham, Aug 2026):
+  - Component A: Fixed-Point Pattern Recognition (spec compliance)
+    A pattern is recognized when the recognizer reaches its fixed point on it.
+    K-H theorem applied at the symbolic level. Identity-solving, not search.
+    W_A: dim×dim → dim×2×dim (receives [K_A_sym, suffix_sig])
+    Inner FP loop nested inside outer dyadic K_A/K_B loop.
+    New diagnostic: A Sym Iter — how fast Component A recognizes patterns.
+    New flag: A_SYM_MAX — inner budget exhausted without convergence.
+  - Spectral norm init on W_FA, W_FB: guarantees Banach contraction condition.
+    spectral_radius(W_FA) · spectral_radius(W_FB) < 1 from step 0.
+    Corollary from Chiral Fixed-Point Commitment: asymmetric contraction
+    preserves committed chirality through the dyadic FP iteration.
+  - New per-layer LN for inner FP: ln_fpAsym_gamma, ln_fpAsym_beta.
+
+  The derivations are the specification. Not suggestions.
+  Build first. Debug backwards. That is our custom.
+-->
+<style>
+:root {
+  --bg-primary:    #1a1816;
+  --bg-secondary:  #242220;
+  --bg-tertiary:   #2e2b28;
+  --border:        #4a4540;
+  --text-main:     #f0ece6;
+  --text-dim:      #9a9088;
+  --accent:        #c9b99a;
+  --accent-bright: #ddd0b8;
+  --accent-dark:   #8a7a66;
+  --success:       #8aaf88;
+  --warning:       #c9a26a;
+  --error:         #c97a6a;
+  --debug-bg:      #1e1c1a;
+  --font: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --radius: 6px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;background:var(--bg-primary);color:var(--text-main);font-family:var(--font);font-size:13px;}
+body{display:flex;flex-direction:column;}
+::-webkit-scrollbar{width:5px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
+
+/* ── HEADER ── */
+#header{
+  display:flex;align-items:center;gap:16px;
+  padding:10px 18px;
+  background:var(--bg-secondary);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  z-index:20;
+}
+#header h1{font-size:15px;font-weight:800;color:var(--accent);letter-spacing:0.5px;}
+#header .sub{color:var(--text-dim);font-size:11px;}
+#header .status-pill{
+  display:flex;align-items:center;gap:7px;
+  font-size:11px;font-weight:700;color:var(--accent);
+  background:rgba(201,185,154,0.08);
+  border:1px solid var(--accent-dark);
+  padding:4px 12px;border-radius:20px;white-space:nowrap;
+}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0;}
+.status-dot.idle{animation:pulse 2.5s infinite;}
+.status-dot.active{background:var(--success);box-shadow:0 0 6px var(--success);animation:none;}
+.status-dot.warn{background:var(--warning);animation:none;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.35;};}
+.tab-btn{padding:4px 12px;background:transparent;border:1px solid var(--border);color:var(--text-dim);cursor:pointer;border-radius:var(--radius);font:inherit;font-size:11px;font-weight:700;transition:all 0.15s;letter-spacing:0.3px;}
+.tab-btn:hover{border-color:var(--accent);color:var(--accent);}
+.tab-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(201,185,154,0.1);}
+#btn-debug-toggle{
+  padding:4px 10px;background:transparent;
+  border:1px solid var(--border);color:var(--text-dim);
+  cursor:pointer;border-radius:var(--radius);font:inherit;font-size:11px;
+  transition:all 0.15s;
+}
+#btn-debug-toggle:hover{border-color:var(--accent);color:var(--accent);}
+
+/* ── MAIN AREA ── */
+#app-body{display:flex;flex:1;min-height:0;overflow:hidden;}
+
+/* ── LEFT PANEL ── */
+#left-panel{
+  width:280px;flex-shrink:0;
+  background:var(--bg-secondary);
+  border-right:1px solid var(--border);
+  overflow-y:auto;
+  display:flex;flex-direction:column;gap:0;
+}
+.lp-section{
+  border-bottom:1px solid var(--border);
+  padding:14px 16px;
+}
+.lp-section h2{
+  font-size:10px;font-weight:800;letter-spacing:1px;
+  color:var(--text-dim);margin-bottom:12px;
+  text-transform:uppercase;
+}
+.field{margin-bottom:10px;}
+.field label{display:flex;justify-content:space-between;color:var(--text-dim);font-size:11px;font-weight:600;margin-bottom:5px;}
+.field label span{color:var(--accent);font-weight:700;}
+input[type="range"]{
+  width:100%;accent-color:var(--accent);cursor:pointer;
+  height:4px;border-radius:2px;background:var(--bg-tertiary);
+  appearance:none;outline:none;
+}
+input[type="range"]::-webkit-slider-thumb{
+  appearance:none;width:14px;height:14px;border-radius:50%;
+  background:var(--accent);cursor:pointer;
+}
+.num-input{
+  background:var(--bg-primary);border:1px solid var(--border);
+  color:var(--text-main);font:inherit;font-size:12px;
+  padding:5px 8px;border-radius:var(--radius);width:100%;outline:none;
+  transition:border-color 0.15s;
+}
+.num-input:focus{border-color:var(--accent);}
+select.num-input{cursor:pointer;}
+textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
+
+.dropzone{
+  border:2px dashed var(--border);border-radius:var(--radius);
+  padding:20px 12px;text-align:center;color:var(--text-dim);
+  cursor:pointer;background:var(--bg-primary);
+  transition:all 0.15s;font-size:12px;
+}
+.dropzone:hover,.dropzone.over{border-color:var(--accent);color:var(--accent);background:rgba(201,185,154,0.05);}
+.dropzone .drop-icon{font-size:22px;margin-bottom:6px;}
+.dropzone .drop-name{color:var(--success);font-size:11px;margin-top:4px;word-break:break-all;}
+
+.btn{
+  display:block;width:100%;padding:8px 12px;
+  background:var(--bg-tertiary);border:1px solid var(--border);
+  color:var(--text-main);font:inherit;font-size:12px;font-weight:700;
+  cursor:pointer;border-radius:var(--radius);text-align:center;
+  transition:all 0.15s;letter-spacing:0.3px;
+}
+.btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
+.btn:disabled{opacity:0.35;cursor:not-allowed;}
+.btn.primary{background:rgba(201,185,154,0.12);border-color:var(--accent);color:var(--accent);}
+.btn.primary:hover:not(:disabled){background:rgba(201,185,154,0.2);}
+.btn+.btn{margin-top:7px;}
+
+.prog-bar-wrap{background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;height:6px;margin-top:6px;}
+.prog-bar{height:100%;background:var(--accent);width:0%;transition:width 0.1s;}
+
+/* ── MAIN PANEL ── */
+#main-panel{flex:1;min-width:0;overflow:hidden;display:flex;flex-direction:column;}
+
+#train-view{flex:1;min-height:0;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:16px;}
+#gen-view{display:none;flex:1;min-height:0;overflow:hidden;flex-direction:column;padding:18px;gap:12px;}
+
+.panel-card{
+  background:var(--bg-secondary);border:1px solid var(--border);
+  border-radius:var(--radius);padding:16px;
+}
+.panel-card h3{
+  font-size:10px;font-weight:800;letter-spacing:1px;
+  color:var(--text-dim);margin-bottom:12px;text-transform:uppercase;
+  padding-bottom:8px;border-bottom:1px solid var(--border);
+}
+
+/* step counter */
+#step-display{
+  font-size:32px;font-weight:800;color:var(--accent);
+  letter-spacing:-1px;line-height:1;
+}
+#step-sub{font-size:11px;color:var(--text-dim);margin-top:4px;}
+
+/* loss chart */
+#loss-canvas{width:100%;height:130px;display:block;background:var(--bg-primary);border-radius:var(--radius);}
+
+/* ternary bars */
+.tbar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;}
+.tbar-label{width:24px;text-align:right;color:var(--text-dim);flex-shrink:0;}
+.tbar-wrap{flex:1;background:var(--bg-primary);border-radius:3px;overflow:hidden;height:14px;}
+.tbar-fill{height:100%;transition:width 0.3s;border-radius:3px;}
+.tbar-fill.neg{background:var(--error);}
+.tbar-fill.zero{background:var(--border);}
+.tbar-fill.pos{background:var(--success);}
+.tbar-pct{width:36px;color:var(--text-dim);flex-shrink:0;}
+
+/* live sample */
+#live-sample{
+  background:var(--bg-primary);border-radius:var(--radius);
+  padding:10px;font-size:11px;color:var(--text-dim);
+  line-height:1.6;min-height:50px;overflow:hidden;
+  display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;
+  white-space:pre-wrap;word-break:break-word;
+}
+
+/* stat grid */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+.stat-item{background:var(--bg-primary);border-radius:var(--radius);padding:8px 10px;}
+.stat-item .s-label{font-size:9px;color:var(--text-dim);letter-spacing:0.5px;text-transform:uppercase;}
+.stat-item .s-val{font-size:16px;font-weight:700;color:var(--accent);margin-top:2px;}
+
+/* generation view */
+#gen-output{
+  flex:1;background:var(--bg-primary);border-radius:var(--radius);
+  padding:12px;font-size:12px;line-height:1.7;color:var(--text-main);
+  overflow-y:auto;white-space:pre-wrap;word-break:break-word;min-height:0;
+}
+#gen-entropy-bar{
+  height:3px;background:var(--bg-tertiary);border-radius:2px;overflow:hidden;
+  margin-bottom:8px;
+}
+#gen-entropy-fill{height:100%;background:var(--accent);width:50%;transition:width 0.2s;}
+#gen-entropy-label{font-size:10px;color:var(--text-dim);margin-bottom:4px;}
+
+/* ── DEBUG PANEL ── */
+#debug-panel{
+  height:0;overflow:hidden;
+  background:var(--debug-bg);border-top:1px solid var(--border);
+  transition:height 0.2s;flex-shrink:0;
+}
+#debug-panel.open{height:200px;}
+#debug-table-wrap{height:100%;overflow-y:auto;overflow-x:auto;}
+#debug-table{width:100%;border-collapse:collapse;font-size:11px;}
+#debug-table th{
+  position:sticky;top:0;background:var(--debug-bg);
+  color:var(--text-dim);font-size:9px;letter-spacing:0.5px;
+  padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);
+  white-space:nowrap;
+}
+#debug-table th:first-child{text-align:left;}
+#debug-table td{
+  padding:4px 10px;color:var(--text-dim);
+  text-align:right;border-bottom:1px solid rgba(74,69,64,0.3);
+}
+#debug-table td:first-child{text-align:left;color:var(--accent);}
+#debug-table tr.warn td{color:var(--warning);}
+#debug-table tr.error td{color:var(--error);}
+
+/* ── CHAT VIEW ── */
+#chat-view{display:none;flex:1;min-height:0;flex-direction:column;}
+#chat-history{flex:1;min-height:0;overflow-y:auto;padding:14px 18px;display:flex;flex-direction:column;gap:10px;}
+.chat-msg{display:flex;flex-direction:column;gap:3px;}
+.chat-msg .cm-role{font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--text-dim);}
+.chat-msg.user .cm-role{color:var(--accent-dark);}
+.chat-msg.learns .cm-role{color:var(--success);}
+.chat-msg .cm-text{background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:9px 12px;font-size:12px;line-height:1.65;white-space:pre-wrap;word-break:break-word;}
+.chat-msg.user .cm-text{border-color:var(--accent-dark);background:rgba(201,185,154,0.06);}
+.chat-msg .cm-meta{font-size:9px;color:var(--text-dim);padding:0 2px;}
+#chat-input-bar{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--border);background:var(--bg-secondary);flex-shrink:0;}
+#chat-input{flex:1;background:var(--bg-primary);border:1px solid var(--border);color:var(--text-main);font:inherit;font-size:12px;padding:8px 10px;border-radius:var(--radius);outline:none;resize:none;min-height:36px;max-height:120px;line-height:1.5;}
+#chat-input:focus{border-color:var(--accent);}
+#btn-chat-send{padding:8px 14px;background:rgba(201,185,154,0.12);border:1px solid var(--accent);color:var(--accent);font:inherit;font-size:12px;font-weight:700;border-radius:var(--radius);cursor:pointer;white-space:nowrap;flex-shrink:0;}
+#btn-chat-send:hover:not(:disabled){background:rgba(201,185,154,0.22);}
+#btn-chat-send:disabled{opacity:0.4;cursor:not-allowed;}
+#chat-entropy-bar{height:2px;background:var(--bg-tertiary);flex-shrink:0;}
+#chat-entropy-fill{height:100%;background:var(--success);width:0%;transition:width 0.3s;}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>LEARNS v0.0009</h1>
+  <span class="sub">Logical Entropic Arrow Recursive Neuro-Symbolic — ConsciousNode SoftWorks</span>
+  <div id="token-pill" style="display:flex;align-items:center;gap:12px;font-size:11px;color:var(--text-dim);margin-left:16px;flex-wrap:wrap;"><span>PARAMS <b id="tc-params">—</b></span><span>CORPUS <b id="tc-corpus">0</b></span><span>TRN <b id="tc-trntps">—</b> tok/s</span><span>IN <b id="tc-in">0</b></span><span>OUT <b id="tc-out">0</b></span><span>INF <b id="tc-inftps">—</b> tok/s</span><span>CTX <b id="tc-ctx">0</b></span></div>
+  <div class="status-pill">
+    <span class="status-dot idle" id="status-dot"></span>
+    <span id="status-text">IDLE</span>
+  </div>
+  <div style="display:flex;gap:6px;margin-left:auto;">
+    <button class="tab-btn active" id="tab-train" onclick="switchView('train')">TRAIN</button>
+    <button class="tab-btn" id="tab-gen" onclick="switchView('gen')">GENERATE</button>
+    <button class="tab-btn" id="tab-chat" onclick="switchView('chat')">CHAT</button>
+  </div>
+  <button id="btn-debug-toggle" onclick="toggleDebug()">DEBUG ▾</button>
+</div>
+
+<div id="app-body">
+
+  <!-- ═══ LEFT PANEL ═══ -->
+  <div id="left-panel">
+
+    <div class="lp-section">
+      <h2>Corpus</h2>
+      <div class="dropzone" id="dropzone" onclick="document.getElementById('file-in').click()">
+        <div class="drop-icon">⬇</div>
+        <div>Drop .txt corpus here</div>
+        <div class="drop-name" id="drop-name" style="display:none"></div>
+      </div>
+      <input type="file" id="file-in" accept=".txt" style="display:none" onchange="onFileLoad(this)">
+      <div style="margin-top:8px;">
+        <button class="btn primary" id="btn-compile" onclick="compileBPE()" disabled>COMPILE BPE</button>
+        <div class="prog-bar-wrap" id="bpe-prog-wrap" style="display:none">
+          <div class="prog-bar" id="bpe-prog"></div>
+        </div>
+        <div style="margin-top:5px;font-size:10px;color:var(--text-dim)" id="bpe-status"></div>
+      </div>
+    </div>
+
+    <div class="lp-section">
+      <h2>Architecture</h2>
+      <div class="field">
+        <label>Vocabulary <span id="v-vocab">2048</span></label>
+        <input type="range" id="cfg-vocab" min="512" max="8192" step="256" value="2048"
+          oninput="document.getElementById('v-vocab').textContent=this.value">
+      </div>
+      <div class="field">
+        <label>Hidden dim <span id="v-dim">128</span></label>
+        <input type="range" id="cfg-dim" min="64" max="512" step="64" value="128"
+          oninput="document.getElementById('v-dim').textContent=this.value">
+      </div>
+      <div class="field">
+        <label>Layers <span id="v-layers">2</span></label>
+        <input type="range" id="cfg-layers" min="1" max="8" step="1" value="2"
+          oninput="document.getElementById('v-layers').textContent=this.value">
+      </div>
+      <div class="field">
+        <label>Chunk size <span id="v-chunk">64</span></label>
+        <input type="range" id="cfg-chunk" min="32" max="256" step="32" value="64"
+          oninput="document.getElementById('v-chunk').textContent=this.value">
+      </div>
+      <div class="field">
+        <label>Max FP iter <span id="v-fp">6</span></label>
+        <input type="range" id="cfg-fp" min="2" max="12" step="1" value="6"
+          oninput="document.getElementById('v-fp').textContent=this.value">
+      </div>
+      <div class="field">
+        <label>Inner FP iter (A) <span id="v-innerfp">4</span></label>
+        <input type="range" id="cfg-innerfp" min="2" max="8" step="1" value="4"
+          oninput="document.getElementById('v-innerfp').textContent=this.value">
+      </div>
+      <div class="field">
+        <label>FP ε</label>
+        <select class="num-input" id="cfg-eps">
+          <option value="1e-3">1e-3</option>
+          <option value="1e-4" selected>1e-4</option>
+          <option value="1e-5">1e-5</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="lp-section">
+      <h2>Training</h2>
+      <div class="field">
+        <label>Total steps</label>
+        <input type="number" class="num-input" id="cfg-steps" value="4000" min="100" step="100">
+      </div>
+      <div class="field">
+        <label>Auto-checkpoint every <span id="v-ckpt">1000</span> steps</label>
+        <input type="range" id="cfg-ckpt" min="100" max="5000" step="100" value="1000"
+          oninput="document.getElementById('v-ckpt').textContent=this.value">
+      </div>
+      <div class="field">
+        <label>LR start</label>
+        <input type="number" class="num-input" id="cfg-lr" value="0.001" min="0.0001" step="0.0001">
+      </div>
+      <div class="field">
+        <label>LR min</label>
+        <input type="number" class="num-input" id="cfg-lr-min" value="0.00001" min="0.000001" step="0.000001">
+      </div>
+      <div class="field">
+        <label>Warmup steps</label>
+        <input type="number" class="num-input" id="cfg-warmup" value="100" min="0" step="10">
+      </div>
+      <div class="field">
+        <label>Thermo λ</label>
+        <input type="number" class="num-input" id="cfg-lambda" value="0.05" min="0" step="0.001">
+      </div>
+      <div class="field">
+        <label>Seed (blank/0 = auto; recorded)</label>
+        <input type="number" class="num-input" id="cfg-seed" value="" min="0" step="1" placeholder="auto">
+      </div>
+      <div class="field">
+        <label>R_B mode</label>
+        <select class="num-input" id="cfg-rbmode">
+          <option value="causal" selected>causal (carry — leak-free)</option>
+          <option value="prevrev">prevrev (reversed prev chunk — leak-free)</option>
+          <option value="legacy">legacy (injects future — LEAKS target)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Validation fraction (0 = off)</label>
+        <input type="number" class="num-input" id="cfg-valfrac" value="0.1" min="0" max="0.5" step="0.05">
+      </div>
+      <div class="field">
+        <label>Validate every N steps</label>
+        <input type="number" class="num-input" id="cfg-valevery" value="50" min="1" step="10">
+      </div>
+      <div class="field">
+        <label>Corpus control</label>
+        <select class="num-input" id="cfg-shuffle">
+          <option value="none" selected>none (real text)</option>
+          <option value="tokens">shuffle tokens (negative control)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="cfg-phiclip" checked style="accent-color:var(--accent);width:13px;height:13px;">
+          <span style="font-size:11px;color:var(--text-dim);">φ-asymmetric gate clipping (uncheck = symmetric control)</span>
+        </label>
+      </div>
+      <div class="field">
+        <label>Live sample every N steps</label>
+        <input type="number" class="num-input" id="cfg-sample-freq" value="250" min="10" step="10">
+      </div>
+      <div class="field">
+        <label>Export name (optional)</label>
+        <input type="text" class="num-input" id="cfg-export-name" placeholder="learns-run-1" style="width:100%">
+      </div>
+      <button class="btn primary" id="btn-train" onclick="startTraining()" disabled>START TRAINING</button>
+      <button class="btn" id="btn-pause" onclick="pauseTraining()" disabled>PAUSE</button>
+      <button class="btn" id="btn-leak" onclick="runLeakProbe()">LEAK PROBE</button>
+      <div class="field" style="margin-top:8px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="chk-save-optim" checked style="accent-color:var(--accent);width:13px;height:13px;">
+          <span style="font-size:11px;color:var(--text-dim);">Skip optimizer state (smaller file)</span>
+        </label>
+      </div>
+      <button class="btn" id="btn-export" onclick="exportModel()" disabled>EXPORT .learns</button>
+      <button class="btn" id="btn-csv" onclick="exportTelemetry()" disabled>EXPORT TELEMETRY CSV</button>
+    </div>
+
+    <div class="lp-section">
+      <h2>Generation</h2>
+      <div class="field">
+        <label>Temperature <span id="v-temp">0.8</span></label>
+        <input type="range" id="cfg-temp" min="0.1" max="2.0" step="0.1" value="0.8"
+          oninput="document.getElementById('v-temp').textContent=parseFloat(this.value).toFixed(1)">
+      </div>
+      <div class="field">
+        <label>Max tokens</label>
+        <input type="number" class="num-input" id="cfg-gentokens" value="200" min="10" step="10">
+      </div>
+      <div class="field">
+        <label>Prompt</label>
+        <textarea class="num-input" id="gen-prompt" rows="3" placeholder="Seed prompt..."></textarea>
+      </div>
+      <button class="btn primary" id="btn-gen" onclick="startGeneration()" disabled>GENERATE</button>
+      <button class="btn" id="btn-clear-gen" onclick="clearGen()">CLEAR</button>
+    </div>
+
+    <div class="lp-section" id="chat-lp-section" style="display:none;">
+      <h2>Chat</h2>
+      <div class="field">
+        <label>Seed prompt (primes records)</label>
+        <textarea class="num-input" id="chat-seed" rows="2" placeholder="You are Pip..."></textarea>
+      </div>
+      <div class="field">
+        <label>Max response tokens <span id="v-chat-max">120</span></label>
+        <input type="range" id="cfg-chat-max" min="20" max="600" step="20" value="120"
+          oninput="document.getElementById('v-chat-max').textContent=this.value">
+      </div>
+      <div class="field">
+        <label>Temperature <span id="v-chat-temp">0.75</span></label>
+        <input type="range" id="cfg-chat-temp" min="0.1" max="1.5" step="0.05" value="0.75"
+          oninput="document.getElementById('v-chat-temp').textContent=parseFloat(this.value).toFixed(2)">
+      </div>
+      <button class="btn" id="btn-new-conv" onclick="newConversation()">NEW CONVERSATION</button>
+    </div>
+
+    <div class="lp-section">
+      <h2>Import</h2>
+      <div class="dropzone" onclick="document.getElementById('model-in').click()">
+        <div class="drop-icon">📂</div>
+        <div style="font-size:11px">Drop or click to load .learns</div>
+      </div>
+      <input type="file" id="model-in" accept=".learns" style="display:none" onchange="importModel(this)">
+    </div>
+
+  </div>
+
+  <!-- ═══ MAIN PANEL ═══ -->
+  <div id="main-panel">
+    <div id="train-view">
+
+      <div class="panel-card">
+        <h3>Training Progress</h3>
+        <div id="step-display">0</div>
+        <div id="step-sub">of 4000 steps — awaiting corpus &amp; BPE</div>
+      </div>
+
+      <div class="panel-card">
+        <h3>Loss — Total (accent) · Thermodynamic (dim)</h3>
+        <canvas id="loss-canvas"></canvas>
+      </div>
+
+      <div class="panel-card">
+        <h3>Ternary Weight Balance — zeros should grow</h3>
+        <div class="tbar-row">
+          <span class="tbar-label">−1</span>
+          <div class="tbar-wrap"><div class="tbar-fill neg" id="tbar-neg" style="width:33%"></div></div>
+          <span class="tbar-pct" id="tpct-neg">33%</span>
+        </div>
+        <div class="tbar-row">
+          <span class="tbar-label">0</span>
+          <div class="tbar-wrap"><div class="tbar-fill zero" id="tbar-zero" style="width:34%"></div></div>
+          <span class="tbar-pct" id="tpct-zero">34%</span>
+        </div>
+        <div class="tbar-row">
+          <span class="tbar-label">+1</span>
+          <div class="tbar-wrap"><div class="tbar-fill pos" id="tbar-pos" style="width:33%"></div></div>
+          <span class="tbar-pct" id="tpct-pos">33%</span>
+        </div>
+      </div>
+
+      <div class="panel-card">
+        <h3>Diagnostics</h3>
+        <div class="stat-grid">
+          <div class="stat-item"><div class="s-label">Loss</div><div class="s-val" id="d-loss">—</div></div>
+          <div class="stat-item"><div class="s-label">FP Iter avg</div><div class="s-val" id="d-fp">—</div></div>
+          <div class="stat-item"><div class="s-label">R_A Entropy</div><div class="s-val" id="d-raent">—</div></div>
+          <div class="stat-item"><div class="s-label">R_B Entropy</div><div class="s-val" id="d-rbent">—</div></div>
+          <div class="stat-item"><div class="s-label">F Entropy</div><div class="s-val" id="d-fent">—</div></div>
+          <div class="stat-item"><div class="s-label">A act</div><div class="s-val" id="d-aact">—</div></div>
+          <div class="stat-item"><div class="s-label">B act</div><div class="s-val" id="d-bact">—</div></div>
+          <div class="stat-item"><div class="s-label">FP Agree</div><div class="s-val" id="d-fpagree">—</div></div>
+          <div class="stat-item"><div class="s-label">A sym iter</div><div class="s-val" id="d-asymiters">—</div></div>
+        </div>
+        <div class="stat-grid" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px;">
+          <div class="stat-item"><div class="s-label">R_A bias ↑+</div><div class="s-val" id="d-rabias">—</div></div>
+          <div class="stat-item"><div class="s-label">R_B bias ↓−</div><div class="s-val" id="d-rbbias">—</div></div>
+          <div class="stat-item"><div class="s-label">Divergence</div><div class="s-val" id="d-diverg">—</div></div>
+          <div class="stat-item"><div class="s-label">Eff ctx</div><div class="s-val" id="d-effctx">—</div></div>
+        </div>
+        <div class="stat-grid" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px;">
+          <div class="stat-item"><div class="s-label">Val loss</div><div class="s-val" id="d-val">—</div></div>
+          <div class="stat-item"><div class="s-label">Val ppl</div><div class="s-val" id="d-valppl">—</div></div>
+          <div class="stat-item"><div class="s-label">Unigram base</div><div class="s-val" id="d-unibase">—</div></div>
+        </div>
+        <pre id="leak-out" style="margin-top:6px;font-size:11px;color:var(--text-dim);white-space:pre-wrap;"></pre>
+      </div>
+
+      <div class="panel-card">
+        <h3>Live Sample — updated every 250 steps</h3>
+        <div id="live-sample" style="color:var(--text-dim);font-style:italic;">Awaiting first training steps...</div>
+      </div>
+
+    </div>
+
+    <div id="gen-view">
+      <div id="gen-entropy-label">Record entropy during generation</div>
+      <div id="gen-entropy-bar"><div id="gen-entropy-fill"></div></div>
+      <div id="gen-output">// Generation output will appear here</div>
+    </div>
+    <!-- CHAT VIEW -->
+    <div id="chat-view" style="display:none;flex:1;min-height:0;flex-direction:column;">
+      <div id="chat-entropy-bar" style="height:2px;background:var(--bg-tertiary);flex-shrink:0;"><div id="chat-entropy-fill" style="height:100%;background:var(--success);width:0%;transition:width 0.3s;"></div></div>
+      <div id="chat-history" style="flex:1;min-height:0;overflow-y:auto;padding:14px 18px;display:flex;flex-direction:column;gap:10px;">
+        <div style="color:var(--text-dim);font-size:11px;font-style:italic;padding:8px 0;">Load a model, then start a conversation. State persists across turns.</div>
+      </div>
+      <div id="chat-input-bar" style="display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--border);background:var(--bg-secondary);flex-shrink:0;">
+        <textarea id="chat-input" rows="1" placeholder="Type a message… (Enter to send, Shift+Enter for newline)" style="flex:1;background:var(--bg-primary);border:1px solid var(--border);color:var(--text-main);font:inherit;font-size:12px;padding:8px 10px;border-radius:var(--radius);outline:none;resize:none;min-height:36px;max-height:120px;line-height:1.5;" onkeydown="chatInputKeydown(event)" oninput="autoResizeChatInput(this)"></textarea>
+        <button id="btn-chat-send" onclick="chatSend()" disabled style="padding:8px 14px;background:rgba(201,185,154,0.12);border:1px solid var(--accent);color:var(--accent);font:inherit;font-size:12px;font-weight:700;border-radius:var(--radius);cursor:pointer;white-space:nowrap;flex-shrink:0;">SEND</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══ DEBUG PANEL ═══ -->
+<div id="debug-panel">
+  <div id="debug-table-wrap">
+    <table id="debug-table">
+      <thead>
+        <tr>
+          <th>STEP</th><th>LOSS</th><th>THERMO</th><th>FP_ITER</th>
+          <th>RA_ENT</th><th>RB_ENT</th><th>F_ENT</th><th>A_ACT</th><th>B_ACT</th><th>FP_AGR</th><th>A_SYM</th><th>FLAG</th>
+          <th title="R_A record weight bias — want +">RA_BIAS</th><th title="R_B record weight bias — want −">RB_BIAS</th><th title="RA_bias − RB_bias — want growing">DIVERG</th><th title="Effective context depth (R_A cosine sim lag)">EFF_CTX</th>
+        </tr>
+      </thead>
+      <tbody id="debug-body">
+        <tr><td colspan="16" style="text-align:center;color:var(--text-dim);padding:20px;">Training not started</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* ╔══════════════════════════════════════════════════════╗
+   ║                MATH UTILITIES                         ║
+   ╚══════════════════════════════════════════════════════╝ */
+
+/* Seeded PRNG (mulberry32). All randomness in init, sampling, split and shuffle goes
+   through rand() so a run is reproducible from its recorded seed. */
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+let _rng = mulberry32(1);
+function seedRNG(seed) { _rng = mulberry32(seed >>> 0); }
+function rand() { return _rng(); }
+
+function randn(n, scale) {
+  const a = new Float32Array(n);
+  for (let i = 0; i < n; i += 2) {
+    const u = rand() || 1e-10, v = rand() || 1e-10;
+    const mag = scale * Math.sqrt(-2 * Math.log(u));
+    a[i] = mag * Math.cos(2 * Math.PI * v);
+    if (i+1 < n) a[i+1] = mag * Math.sin(2 * Math.PI * v);
+  }
+  return a;
+}
+
+function zeros(n) { return new Float32Array(n); }
+
+function matvec(W, x, rows, cols) {
+  const y = new Float32Array(rows);
+  for (let i = 0; i < rows; i++) {
+    let s = 0, base = i * cols;
+    for (let j = 0; j < cols; j++) s += W[base+j] * x[j];
+    y[i] = s;
+  }
+  return y;
+}
+
+function matvecT(W, g, rows, cols) {
+  const out = new Float32Array(cols);
+  for (let i = 0; i < rows; i++) {
+    const gi = g[i], base = i * cols;
+    for (let j = 0; j < cols; j++) out[j] += W[base+j] * gi;
+  }
+  return out;
+}
+
+function outerAccum(grad_W, x, g, rows, cols) {
+  for (let i = 0; i < rows; i++) {
+    const gi = g[i], base = i * cols;
+    for (let j = 0; j < cols; j++) grad_W[base+j] += gi * x[j];
+  }
+}
+
+function matvecTernary(W, x, rows, cols) {
+  let absSum = 0;
+  for (let i = 0; i < W.length; i++) absSum += Math.abs(W[i]);
+  const scale = absSum / (W.length + 1e-8);
+  const threshold = 0.5 * scale;
+  const y = new Float32Array(rows);
+  for (let i = 0; i < rows; i++) {
+    let s = 0, base = i * cols;
+    for (let j = 0; j < cols; j++) {
+      const w = W[base+j];
+      if (w > threshold) s += x[j];
+      else if (w < -threshold) s -= x[j];
+    }
+    y[i] = s * scale;
+  }
+  return y;
+}
+
+function vecadd(a, b) {
+  const c = new Float32Array(a.length);
+  for (let i = 0; i < a.length; i++) c[i] = a[i] + b[i];
+  return c;
+}
+function vecaddInPlace(a, b) { for (let i = 0; i < a.length; i++) a[i] += b[i]; }
+function vecsub(a, b) {
+  const c = new Float32Array(a.length);
+  for (let i = 0; i < a.length; i++) c[i] = a[i] - b[i];
+  return c;
+}
+function vecmul(a, b) {
+  const c = new Float32Array(a.length);
+  for (let i = 0; i < a.length; i++) c[i] = a[i] * b[i];
+  return c;
+}
+function l2norm(v) { let s = 0; for (let i = 0; i < v.length; i++) s += v[i]*v[i]; return Math.sqrt(s); }
+function meanAbs(v) { let s = 0; for (let i = 0; i < v.length; i++) s += Math.abs(v[i]); return s/v.length; }
+
+function softmax(v) {
+  let max = -Infinity;
+  for (let i = 0; i < v.length; i++) if (v[i] > max) max = v[i];
+  const out = new Float32Array(v.length);
+  let sum = 0;
+  for (let i = 0; i < v.length; i++) { out[i] = Math.exp(v[i] - max); sum += out[i]; }
+  for (let i = 0; i < out.length; i++) out[i] /= sum;
+  return out;
+}
+
+function entropy(probs) {
+  let s = 0;
+  for (let i = 0; i < probs.length; i++) if (probs[i] > 0) s -= probs[i] * Math.log(probs[i] + 1e-10);
+  return s;
+}
+function recordEntropy(R) { return entropy(softmax(R)); }
+
+function layerNorm(x, gamma, beta, eps=1e-5) {
+  const n = x.length;
+  let mean = 0;
+  for (let i = 0; i < n; i++) mean += x[i];
+  mean /= n;
+  let variance = 0;
+  for (let i = 0; i < n; i++) variance += (x[i]-mean)*(x[i]-mean);
+  variance /= n;
+  const invStd = 1 / Math.sqrt(variance + eps);
+  const out = new Float32Array(n);
+  const xhat = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    xhat[i] = (x[i] - mean) * invStd;
+    out[i] = gamma[i] * xhat[i] + beta[i];
+  }
+  return { out, cache: { xhat, invStd, n, mean } };
+}
+
+function layerNormBackward(grad, cache, gamma) {
+  const { xhat, invStd, n } = cache;
+  const grad_xhat = new Float32Array(n);
+  const grad_gamma = new Float32Array(n);
+  const grad_beta = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    grad_gamma[i] = grad[i] * xhat[i];
+    grad_beta[i] = grad[i];
+    grad_xhat[i] = grad[i] * gamma[i];
+  }
+  let sum1 = 0, sum2 = 0;
+  for (let i = 0; i < n; i++) { sum1 += grad_xhat[i]; sum2 += grad_xhat[i] * xhat[i]; }
+  const grad_x = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    grad_x[i] = invStd * (grad_xhat[i] - sum1/n - xhat[i]*sum2/n);
+  }
+  return { grad_x, grad_gamma, grad_beta };
+}
+
+function tanh_v(v) {
+  const out = new Float32Array(v.length);
+  for (let i = 0; i < v.length; i++) out[i] = Math.tanh(v[i]);
+  return out;
+}
+function sigmoid_v(v) {
+  const out = new Float32Array(v.length);
+  for (let i = 0; i < v.length; i++) out[i] = 1 / (1 + Math.exp(-v[i]));
+  return out;
+}
+
+function concat2(a, b) {
+  const out = new Float32Array(a.length + b.length);
+  out.set(a, 0); out.set(b, a.length);
+  return out;
+}
+function concat3(a, b, c_) {
+  const out = new Float32Array(a.length + b.length + c_.length);
+  out.set(a, 0); out.set(b, a.length); out.set(c_, a.length + b.length);
+  return out;
+}
+
+function givensRotate(h, thetas) {
+  const out = h.slice();
+  for (let i = 0; i < thetas.length; i++) {
+    const a = 2*i, b = 2*i+1;
+    const c = Math.cos(thetas[i]), s = Math.sin(thetas[i]);
+    out[a] = c*h[a] - s*h[b];
+    out[b] = s*h[a] + c*h[b];
+  }
+  return out;
+}
+function givensRotateBackward(h, thetas, grad_out) {
+  const grad_h = new Float32Array(h.length);
+  const grad_theta = new Float32Array(thetas.length);
+  for (let i = 0; i < thetas.length; i++) {
+    const a = 2*i, b = 2*i+1;
+    const c = Math.cos(thetas[i]), s = Math.sin(thetas[i]);
+    grad_h[a] = c*grad_out[a] + s*grad_out[b];
+    grad_h[b] = -s*grad_out[a] + c*grad_out[b];
+    grad_theta[i] = (-s*h[a] - c*h[b])*grad_out[a] + (c*h[a] - s*h[b])*grad_out[b];
+  }
+  return { grad_h, grad_theta };
+}
+
+/* ── Spectral norm init: guarantee Banach contraction for dyadic FP ── */
+/* spectral_radius(W_FA) · spectral_radius(W_FB) < 1 from step 0.     */
+/* Power iteration to estimate largest singular value, then rescale.   */
+function spectralNormInit(W, dim, target=0.9) {
+  let v = new Float32Array(dim);
+  for (let i = 0; i < dim; i++) v[i] = rand() - 0.5;
+  const nv = l2norm(v); for (let i = 0; i < dim; i++) v[i] /= nv + 1e-8;
+  let sigma = 1.0;
+  for (let it = 0; it < 20; it++) {
+    const Wv = matvec(W, v, dim, dim);
+    sigma = l2norm(Wv);
+    if (sigma < 1e-8) return;
+    const u = new Float32Array(dim);
+    for (let i = 0; i < dim; i++) u[i] = Wv[i] / sigma;
+    const WTu = matvecT(W, u, dim, dim);
+    const sWTu = l2norm(WTu);
+    for (let i = 0; i < dim; i++) v[i] = WTu[i] / (sWTu + 1e-8);
+  }
+  if (sigma > target) {
+    const s = target / sigma;
+    for (let i = 0; i < W.length; i++) W[i] *= s;
+  }
+}
+
+/* ── Legacy single fixed-point (kept for reference) ── */
+function fixedPointSolve(K_init, W_F, ln_gamma, ln_beta, MAX_ITER, eps) {
+  let K = K_init.slice();
+  const dim = K.length;
+  for (let i = 0; i < MAX_ITER; i++) {
+    const pre = matvec(W_F, K, dim, dim);
+    const pre_tanh = tanh_v(pre);
+    const { out: K_next } = layerNorm(pre_tanh, ln_gamma, ln_beta);
+    const diff = l2norm(vecsub(K_next, K));
+    K = K_next;
+    if (diff < eps) return { state: K, iters: i+1 };
+  }
+  return { state: K, iters: MAX_ITER };
+}
+
+/* ── Dyadic fixed-point: K_A = F_A(K_B) AND K_B = F_B(K_A) ── */
+/* K needs H. A single K cannot converge alone (K-H theorem).   */
+function dyadicFPSolve(K_A_init, K_B_init, W_FA, W_FB,
+    ln_A_gamma, ln_A_beta, ln_B_gamma, ln_B_beta, MAX_ITER, eps) {
+  const dim = K_A_init.length;
+  let K_A = K_A_init.slice();
+  let K_B = K_B_init.slice();
+  for (let i = 0; i < MAX_ITER; i++) {
+    const pre_A = matvec(W_FA, K_B, dim, dim);
+    const { out: K_A_next } = layerNorm(tanh_v(pre_A), ln_A_gamma, ln_A_beta);
+    const pre_B = matvec(W_FB, K_A, dim, dim);
+    const { out: K_B_next } = layerNorm(tanh_v(pre_B), ln_B_gamma, ln_B_beta);
+    const diff_A = l2norm(vecsub(K_A_next, K_A));
+    const diff_B = l2norm(vecsub(K_B_next, K_B));
+    K_A = K_A_next; K_B = K_B_next;
+    if (diff_A < eps && diff_B < eps)
+      return { K_A, K_B, iters: i+1, agree: diff_A + diff_B };
+  }
+  return { K_A, K_B, iters: MAX_ITER, agree: l2norm(vecsub(K_A, K_B)) };
+}
+
+/* ── Inner fixed-point: Component A pattern recognition ────────── */
+/* A pattern is recognized when the recognizer reaches its fixed   */
+/* point on it. K-H theorem applied at the symbolic level.         */
+/* Input: [K_A_sym (current), suffix_sig (pattern)] → 2*dim        */
+/* Output: K_A_sym* — the recognizer's identity on this pattern.   */
+function innerFPSolve(suffix_sig, W_A, ln_gamma, ln_beta, MAX_ITER, eps, dim) {
+  let K = zeros(dim);
+  let lastInput = concat2(K, suffix_sig);
+  let lastPreTanh = zeros(dim);
+  let lastLnCache = null;
+  for (let i = 0; i < MAX_ITER; i++) {
+    const inp = concat2(K, suffix_sig);
+    const pre = matvecTernary(W_A, inp, dim, 2*dim);
+    const pre_tanh = tanh_v(pre);
+    const { out: K_next, cache: lnc } = layerNorm(pre_tanh, ln_gamma, ln_beta);
+    const diff = l2norm(vecsub(K_next, K));
+    lastInput = inp; lastPreTanh = pre_tanh; lastLnCache = lnc;
+    K = K_next;
+    if (diff < eps) return { state: K, iters: i+1, lastInput, lastPreTanh, lastLnCache };
+  }
+  return { state: K, iters: MAX_ITER, lastInput, lastPreTanh, lastLnCache };
+}
+
+/* ╔══════════════════════════════════════════════════════╗
+   ║                BPE TOKENIZER                          ║
+   ╚══════════════════════════════════════════════════════╝ */
+
+const Tokenizer = {
+  vocab: null,
+  merges: null,
+  vocabSize: 0,
+  trained: false,
+
+  async compile(text, targetVocab, onProgress) {
+    this.trained = false;
+    const bytes = Array.from(new TextEncoder().encode(text));
+    let tokens = bytes.slice();
+    const vocab = new Map();
+    for (let i = 0; i < 256; i++) vocab.set(i, new Uint8Array([i]));
+    vocab.set(256, new Uint8Array(0));
+    vocab.set(257, new Uint8Array(0));
+    vocab.set(258, new Uint8Array(0));
+    const merges = new Map();
+    let nextId = 259;
+    const maxMerges = Math.max(0, targetVocab - 259);
+    for (let m = 0; m < maxMerges; m++) {
+      if (m % 50 === 0) { onProgress && onProgress(m / maxMerges); await new Promise(r => setTimeout(r, 0)); }
+      const pairCounts = new Map();
+      for (let i = 0; i < tokens.length - 1; i++) {
+        const pair = tokens[i] * 65536 + tokens[i+1];
+        pairCounts.set(pair, (pairCounts.get(pair) || 0) + 1);
+      }
+      if (pairCounts.size === 0) break;
+      let bestPair = -1, bestCount = 0;
+      for (const [pair, cnt] of pairCounts) { if (cnt > bestCount) { bestCount = cnt; bestPair = pair; } }
+      if (bestCount < 2) break;
+      const a = Math.floor(bestPair / 65536), b = bestPair % 65536;
+      const newId = nextId++;
+      merges.set(bestPair, newId);
+      const ba = vocab.get(a) || new Uint8Array([a]);
+      const bb = vocab.get(b) || new Uint8Array([b]);
+      const merged = new Uint8Array(ba.length + bb.length);
+      merged.set(ba); merged.set(bb, ba.length);
+      vocab.set(newId, merged);
+      const newTokens = [];
+      for (let i = 0; i < tokens.length; i++) {
+        if (i < tokens.length-1 && tokens[i] === a && tokens[i+1] === b) { newTokens.push(newId); i++; }
+        else newTokens.push(tokens[i]);
+      }
+      tokens = newTokens;
+    }
+    this.vocab = vocab; this.merges = merges; this.vocabSize = nextId; this.trained = true;
+    onProgress && onProgress(1);
+  },
+
+  encode(text) {
+    if (!this.trained) return [];
+    let tokens = Array.from(new TextEncoder().encode(text));
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const res = [];
+      for (let i = 0; i < tokens.length; i++) {
+        if (i < tokens.length-1) {
+          const key = tokens[i]*65536 + tokens[i+1];
+          if (this.merges.has(key)) { res.push(this.merges.get(key)); i++; changed = true; continue; }
+        }
+        res.push(tokens[i]);
+      }
+      tokens = res;
+    }
+    return tokens;
+  },
+
+  decode(ids) {
+    const all = [];
+    for (const id of ids) { const bytes = this.vocab.get(id); if (bytes) for (const b of bytes) all.push(b); }
+    return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(all));
+  },
+
+  serialize() {
+    const v = {};
+    for (const [k, val] of this.vocab) v[k] = Array.from(val);
+    return { vocab: v, merges: [...this.merges.entries()], vocabSize: this.vocabSize };
+  },
+
+  deserialize(data) {
+    this.vocab = new Map(Object.entries(data.vocab).map(([k,v]) => [parseInt(k), new Uint8Array(v)]));
+    this.merges = new Map(data.merges);
+    this.vocabSize = data.vocabSize;
+    this.trained = true;
+  }
+};
+
+/* ╔══════════════════════════════════════════════════════╗
+   ║            LEARNS MODEL — ALL 6 COMPONENTS           ║
+   ╚══════════════════════════════════════════════════════╝ */
+
+class LEARNSModel {
+  constructor(cfg) {
+    const { vocab, dim, layers, K_hist = 32 } = cfg;
+    this.vocab = vocab; this.dim = dim; this.numLayers = layers; this.K_hist = K_hist;
+    const scale = 0.02;
+    const PHI = (1 + Math.sqrt(5)) / 2;
+
+    // ── (1) RELATIONAL EMBEDDING (from It's All Relative) ────────────
+    this.W_embed = randn(vocab * dim, scale);
+    this.W_embed_grad = zeros(vocab * dim);
+    this.W_embed_m1 = zeros(vocab * dim); this.W_embed_m2 = zeros(vocab * dim);
+    this.W_rel = randn(dim * dim, scale);
+    this.W_rel_grad = zeros(dim * dim);
+    this.W_rel_m1 = zeros(dim * dim); this.W_rel_m2 = zeros(dim * dim);
+
+    // ── Per-layer arrays ──────────────────────────────────────────────
+    // (2) Temporal Turing Core
+    this.layers_W_A = []; this.layers_W_A_grad = [];
+    this.layers_W_A_m1 = []; this.layers_W_A_m2 = [];
+    this.layers_W_B = []; this.layers_W_B_grad = [];
+    this.layers_W_B_m1 = []; this.layers_W_B_m2 = [];
+    this.layers_W_gA = []; this.layers_W_gA_grad = [];
+    this.layers_W_gA_m1 = []; this.layers_W_gA_m2 = [];
+    this.layers_W_gB = []; this.layers_W_gB_grad = [];
+    this.layers_W_gB_m1 = []; this.layers_W_gB_m2 = [];
+    // Inner FP LN for Component A symbolic recognition (v0.0003)
+    this.layers_ln_fpAsym_gamma = []; this.layers_ln_fpAsym_beta = [];
+    this.layers_ln_fpAsym_gamma_grad = []; this.layers_ln_fpAsym_beta_grad = [];
+    this.layers_ln_fpAsym_gamma_m1 = []; this.layers_ln_fpAsym_gamma_m2 = [];
+    this.layers_ln_fpAsym_beta_m1 = []; this.layers_ln_fpAsym_beta_m2 = [];
+    // (3) Dyadic Fixed-Point
+    this.layers_W_FA = []; this.layers_W_FA_grad = [];
+    this.layers_W_FA_m1 = []; this.layers_W_FA_m2 = [];
+    this.layers_W_FB = []; this.layers_W_FB_grad = [];
+    this.layers_W_FB_m1 = []; this.layers_W_FB_m2 = [];
+    this.layers_ln_fpA_gamma = []; this.layers_ln_fpA_beta = [];
+    this.layers_ln_fpA_gamma_grad = []; this.layers_ln_fpA_beta_grad = [];
+    this.layers_ln_fpA_gamma_m1 = []; this.layers_ln_fpA_gamma_m2 = [];
+    this.layers_ln_fpA_beta_m1 = []; this.layers_ln_fpA_beta_m2 = [];
+    this.layers_ln_fpB_gamma = []; this.layers_ln_fpB_beta = [];
+    this.layers_ln_fpB_gamma_grad = []; this.layers_ln_fpB_beta_grad = [];
+    this.layers_ln_fpB_gamma_m1 = []; this.layers_ln_fpB_gamma_m2 = [];
+    this.layers_ln_fpB_beta_m1 = []; this.layers_ln_fpB_beta_m2 = [];
+    // (5) Helical State Update
+    this.layers_thetas = []; this.layers_thetas_grad = [];
+    this.layers_thetas_m1 = []; this.layers_thetas_m2 = [];
+    this.layers_W_prog = []; this.layers_W_prog_grad = [];
+    this.layers_W_prog_m1 = []; this.layers_W_prog_m2 = [];
+    this.layers_W_px = []; this.layers_W_px_grad = [];
+    this.layers_W_px_m1 = []; this.layers_W_px_m2 = [];
+
+    for (let l = 0; l < layers; l++) {
+      // Component A: now dim×2*dim — receives [K_A_sym, suffix_sig]
+      this.layers_W_A.push(randn(dim * 2 * dim, scale));
+      this.layers_W_A_grad.push(zeros(dim * 2 * dim));
+      this.layers_W_A_m1.push(zeros(dim*2*dim)); this.layers_W_A_m2.push(zeros(dim*2*dim));
+
+      this.layers_W_B.push(randn(dim * 2 * dim, scale));
+      this.layers_W_B_grad.push(zeros(dim * 2 * dim));
+      this.layers_W_B_m1.push(zeros(dim*2*dim)); this.layers_W_B_m2.push(zeros(dim*2*dim));
+
+      // Gate asymmetry: W_gA at PHI scale, W_gB at 1/PHI — Turing minimum coupling
+      this.layers_W_gA.push(randn(dim * dim, scale * PHI));
+      this.layers_W_gA_grad.push(zeros(dim * dim));
+      this.layers_W_gA_m1.push(zeros(dim*dim)); this.layers_W_gA_m2.push(zeros(dim*dim));
+
+      this.layers_W_gB.push(randn(dim * dim, scale / PHI));
+      this.layers_W_gB_grad.push(zeros(dim * dim));
+      this.layers_W_gB_m1.push(zeros(dim*dim)); this.layers_W_gB_m2.push(zeros(dim*dim));
+
+      // Inner FP LN for Component A
+      const ln_gAsym = new Float32Array(dim).fill(1);
+      const ln_bAsym = zeros(dim);
+      this.layers_ln_fpAsym_gamma.push(ln_gAsym); this.layers_ln_fpAsym_beta.push(ln_bAsym);
+      this.layers_ln_fpAsym_gamma_grad.push(zeros(dim)); this.layers_ln_fpAsym_beta_grad.push(zeros(dim));
+      this.layers_ln_fpAsym_gamma_m1.push(zeros(dim)); this.layers_ln_fpAsym_gamma_m2.push(zeros(dim));
+      this.layers_ln_fpAsym_beta_m1.push(zeros(dim)); this.layers_ln_fpAsym_beta_m2.push(zeros(dim));
+
+      // Dyadic FP matrices — spectral norm init ensures contraction from step 0
+      const W_FA_l = randn(dim * dim, scale);
+      const W_FB_l = randn(dim * dim, scale);
+      spectralNormInit(W_FA_l, dim);
+      spectralNormInit(W_FB_l, dim);
+      this.layers_W_FA.push(W_FA_l);
+      this.layers_W_FA_grad.push(zeros(dim * dim));
+      this.layers_W_FA_m1.push(zeros(dim*dim)); this.layers_W_FA_m2.push(zeros(dim*dim));
+      this.layers_W_FB.push(W_FB_l);
+      this.layers_W_FB_grad.push(zeros(dim * dim));
+      this.layers_W_FB_m1.push(zeros(dim*dim)); this.layers_W_FB_m2.push(zeros(dim*dim));
+
+      const ln_gA = new Float32Array(dim).fill(1); const ln_bA = zeros(dim);
+      this.layers_ln_fpA_gamma.push(ln_gA); this.layers_ln_fpA_beta.push(ln_bA);
+      this.layers_ln_fpA_gamma_grad.push(zeros(dim)); this.layers_ln_fpA_beta_grad.push(zeros(dim));
+      this.layers_ln_fpA_gamma_m1.push(zeros(dim)); this.layers_ln_fpA_gamma_m2.push(zeros(dim));
+      this.layers_ln_fpA_beta_m1.push(zeros(dim)); this.layers_ln_fpA_beta_m2.push(zeros(dim));
+
+      const ln_gB = new Float32Array(dim).fill(1); const ln_bB = zeros(dim);
+      this.layers_ln_fpB_gamma.push(ln_gB); this.layers_ln_fpB_beta.push(ln_bB);
+      this.layers_ln_fpB_gamma_grad.push(zeros(dim)); this.layers_ln_fpB_beta_grad.push(zeros(dim));
+      this.layers_ln_fpB_gamma_m1.push(zeros(dim)); this.layers_ln_fpB_gamma_m2.push(zeros(dim));
+      this.layers_ln_fpB_beta_m1.push(zeros(dim)); this.layers_ln_fpB_beta_m2.push(zeros(dim));
+
+      this.layers_thetas.push(randn(Math.floor(dim/2), 0.01));
+      this.layers_thetas_grad.push(zeros(Math.floor(dim/2)));
+      this.layers_thetas_m1.push(zeros(Math.floor(dim/2))); this.layers_thetas_m2.push(zeros(Math.floor(dim/2)));
+
+      this.layers_W_prog.push(randn(dim * dim, scale));
+      this.layers_W_prog_grad.push(zeros(dim * dim));
+      this.layers_W_prog_m1.push(zeros(dim*dim)); this.layers_W_prog_m2.push(zeros(dim*dim));
+
+      this.layers_W_px.push(randn(dim * 3 * dim, scale));
+      this.layers_W_px_grad.push(zeros(dim * 3 * dim));
+      this.layers_W_px_m1.push(zeros(dim*3*dim)); this.layers_W_px_m2.push(zeros(dim*3*dim));
+    }
+
+    // ── (4) DYADIC RECORD STATE (Look Around You forced result) ──────
+    // A single thing cannot converge. Entanglement required.
+    this.W_rec_A = randn(dim * dim, scale);
+    this.W_rec_A_grad = zeros(dim * dim);
+    this.W_rec_A_m1 = zeros(dim*dim); this.W_rec_A_m2 = zeros(dim*dim);
+    this.W_rec_B = randn(dim * dim, scale);
+    this.W_rec_B_grad = zeros(dim * dim);
+    this.W_rec_B_m1 = zeros(dim*dim); this.W_rec_B_m2 = zeros(dim*dim);
+    this.W_cross_A = randn(dim * dim, scale * 0.5);
+    this.W_cross_A_grad = zeros(dim * dim);
+    this.W_cross_A_m1 = zeros(dim*dim); this.W_cross_A_m2 = zeros(dim*dim);
+    this.W_cross_B = randn(dim * dim, scale * 0.5);
+    this.W_cross_B_grad = zeros(dim * dim);
+    this.W_cross_B_m1 = zeros(dim*dim); this.W_cross_B_m2 = zeros(dim*dim);
+
+    this.ln_recA_gamma = new Float32Array(dim).fill(1); this.ln_recA_beta = zeros(dim);
+    this.ln_recA_gamma_grad = zeros(dim); this.ln_recA_beta_grad = zeros(dim);
+    this.ln_recA_gamma_m1 = zeros(dim); this.ln_recA_gamma_m2 = zeros(dim);
+    this.ln_recA_beta_m1 = zeros(dim); this.ln_recA_beta_m2 = zeros(dim);
+
+    this.ln_recB_gamma = new Float32Array(dim).fill(1); this.ln_recB_beta = zeros(dim);
+    this.ln_recB_gamma_grad = zeros(dim); this.ln_recB_beta_grad = zeros(dim);
+    this.ln_recB_gamma_m1 = zeros(dim); this.ln_recB_gamma_m2 = zeros(dim);
+    this.ln_recB_beta_m1 = zeros(dim); this.ln_recB_beta_m2 = zeros(dim);
+
+    // Frontier: R_combined = 0.5*(R_A + R_B)
+    this.W_frontier = randn(vocab * dim, scale * 0.5);
+    this.W_frontier_grad = zeros(vocab * dim);
+    this.W_frontier_m1 = zeros(vocab*dim); this.W_frontier_m2 = zeros(vocab*dim);
+  }
+
+  getParamCount() {
+    const { vocab, dim, numLayers } = this;
+    let n = 0;
+    n += vocab * dim;          // W_embed
+    n += dim * dim;            // W_rel
+    n += dim * dim;            // W_rec_A
+    n += dim * dim;            // W_rec_B
+    n += dim * dim;            // W_cross_A
+    n += dim * dim;            // W_cross_B
+    n += dim * vocab;          // W_frontier
+    for (let l = 0; l < numLayers; l++) {
+      n += (dim + dim) * dim;  // W_A (suffix_sig + K_sym)
+      n += (dim + dim) * dim;  // W_B
+      n += dim * dim;          // W_gA
+      n += dim * dim;          // W_gB
+      n += dim * dim;          // W_FA
+      n += dim * dim;          // W_FB
+      n += dim * dim;          // W_prog (dim → dim)
+      n += dim * 3 * dim;      // W_px (concat3: h, K_combined, e → 3·dim input)
+      n += dim;                // thetas (Givens angles)
+    }
+    return n;
+  }
+
+  getEmptyState() {
+    return { h: zeros(this.dim), R_A: zeros(this.dim), R_B: zeros(this.dim), tokenHistory: [] };
+  }
+
+
+  _suffixSig(tokenHistory) {
+    const { dim, K_hist } = this;
+    const sig = zeros(dim);
+    const n = Math.min(tokenHistory.length, K_hist);
+    if (n === 0) return sig;
+    const vocabDim = this.W_embed.length / this.vocab;
+    for (let k = 0; k < n; k++) {
+      const w = (k + 1) / n;
+      const base = tokenHistory[tokenHistory.length - n + k] * vocabDim;
+      for (let j = 0; j < dim; j++) sig[j] += w * this.W_embed[base + j];
+    }
+    const scale = 1 / n;
+    for (let j = 0; j < dim; j++) sig[j] *= scale;
+    return sig;
+  }
+
+  // ── Jacobian-vector product helpers for Neumann gradient correction ──────
+  // FIX 4a: J_F^T · v where F(K_input) = LN(tanh(W · K_input))
+  // Used for dyadic FP Neumann correction.
+  _fpJacobianT(v, last_tanh, last_ln_cache, W, ln_gamma) {
+    const dim = v.length;
+    const { grad_x: ln_back } = layerNormBackward(v, last_ln_cache, ln_gamma);
+    const tb = new Float32Array(dim);
+    for (let j = 0; j < dim; j++) tb[j] = ln_back[j] * (1 - last_tanh[j]*last_tanh[j]);
+    let s = 0; for (const w of W) s += Math.abs(w);
+    const sc = s / (W.length + 1e-8);
+    const out = matvecT(W, tb, dim, dim);
+    for (let j = 0; j < dim; j++) out[j] *= sc;
+    return out;
+  }
+
+  // FIX 4b: J_innerF^T · v where innerF(K) = LN(tanh(W_A · [K, suffix_sig]))
+  // Only the K-input block of W_A contributes to ∂innerF/∂K.
+  // Used for inner FP (Component A) Neumann correction.
+  _innerFPJacobianT(v, last_tanh, last_ln_cache, W_A, ln_gamma) {
+    const dim = v.length;
+    const { grad_x: ln_back } = layerNormBackward(v, last_ln_cache, ln_gamma);
+    const tb = new Float32Array(dim);
+    for (let j = 0; j < dim; j++) tb[j] = ln_back[j] * (1 - last_tanh[j]*last_tanh[j]);
+    let s = 0; for (const w of W_A) s += Math.abs(w);
+    const sc = s / (W_A.length + 1e-8);
+    // (W_A[:, :dim])^T · tb — first dim columns of W_A^T
+    const out = new Float32Array(dim);
+    for (let i = 0; i < dim; i++) {
+      let sum = 0;
+      for (let j = 0; j < dim; j++) sum += W_A[j * 2*dim + i] * tb[j];
+      out[i] = sum * sc;
+    }
+    return out;
+  }
+
+  forward(tokenId, state, cfg) {
+    const { dim, numLayers } = this;
+    const { h: h_prev, R_A: R_A_prev, R_B: R_B_prev, tokenHistory } = state;
+    const { maxFPIter, fpEps, innerFPMax = 4 } = cfg;
+    const caches = { layers: [] };
+
+    // ── (1) RELATIONAL EMBEDDING ──────────────────────────────────────
+    const embed = new Float32Array(dim);
+    const embedBase = tokenId * dim;
+    for (let j = 0; j < dim; j++) embed[j] = this.W_embed[embedBase + j];
+    const R_combined_prev = new Float32Array(dim);
+    for (let j = 0; j < dim; j++) R_combined_prev[j] = 0.5 * (R_A_prev[j] + R_B_prev[j]);
+    const rel_offset = matvecTernary(this.W_rel, R_combined_prev, dim, dim);
+    const e = vecadd(embed, rel_offset);
+    caches.embed = embed; caches.tokenId = tokenId;
+    caches.R_A_prev = R_A_prev.slice(); caches.R_B_prev = R_B_prev.slice();
+    caches.R_combined_prev = R_combined_prev; caches.e = e;
+
+    // ── LAYERS ────────────────────────────────────────────────────────
+    let h = h_prev.slice();
+    let K_A_final = null, K_B_final = null;
+    let totalFPIters = 0, totalFPAgree = 0, totalASymIters = 0;
+    const suffix_sig = this._suffixSig(tokenHistory);
+    caches.suffix_sig = suffix_sig;
+    caches.suffix_hist = tokenHistory.slice();  // FIX 2: for W_embed←suffix backward
+    let a_act_sum = 0, b_act_sum = 0, act_count = 0;
+
+    for (let l = 0; l < numLayers; l++) {
+      const lc = {};
+
+      // ── (2) TEMPORAL TURING CORE ───────────────────────────────────
+      const { state: a_t, iters: aSymIters,
+              lastInput: innerFPInput, lastPreTanh: innerFPPreTanh,
+              lastLnCache: innerFPLnCache } =
+        innerFPSolve(suffix_sig, this.layers_W_A[l],
+          this.layers_ln_fpAsym_gamma[l], this.layers_ln_fpAsym_beta[l],
+          innerFPMax, fpEps, dim);
+      totalASymIters += aSymIters;
+      lc.a_t = a_t;
+      lc.innerFPInput = innerFPInput;
+      lc.innerFPPreTanh = innerFPPreTanh;
+      lc.innerFPLnCache = innerFPLnCache;
+      lc.aSymIters = aSymIters;
+
+      const b_input = concat2(h, R_combined_prev);
+      const b_pre = matvecTernary(this.layers_W_B[l], b_input, dim, 2*dim);
+      const b_t = tanh_v(b_pre);
+      lc.b_input = b_input; lc.b_pre = b_pre; lc.b_t = b_t;
+
+      const gA_pre = matvecTernary(this.layers_W_gA[l], b_t, dim, dim);
+      const gA = sigmoid_v(gA_pre);
+      const gB_pre = matvecTernary(this.layers_W_gB[l], a_t, dim, dim);
+      const gB = sigmoid_v(gB_pre);
+      lc.gA_pre = gA_pre; lc.gA = gA; lc.gB_pre = gB_pre; lc.gB = gB;
+
+      for (let j = 0; j < dim; j++) { a_act_sum += Math.abs(a_t[j]); b_act_sum += Math.abs(b_t[j]); }
+      act_count += dim;
+
+      // ── (3) DYADIC FIXED-POINT ──────────────────────────────────────
+      const K_A_init = new Float32Array(dim);
+      const K_B_init = new Float32Array(dim);
+      for (let j = 0; j < dim; j++) {
+        K_A_init[j] = gA[j] * a_t[j];
+        K_B_init[j] = gB[j] * b_t[j];
+      }
+      // FIX 4a: dyadicFPSolve now returns last-step caches for Neumann correction
+      const { K_A, K_B, iters, agree,
+              last_tanh_A, last_ln_A_cache,
+              last_tanh_B, last_ln_B_cache } = dyadicFPSolve(
+        K_A_init, K_B_init,
+        this.layers_W_FA[l], this.layers_W_FB[l],
+        this.layers_ln_fpA_gamma[l], this.layers_ln_fpA_beta[l],
+        this.layers_ln_fpB_gamma[l], this.layers_ln_fpB_beta[l],
+        maxFPIter, fpEps
+      );
+      totalFPIters += iters; totalFPAgree += agree;
+      lc.K_A_init = K_A_init; lc.K_B_init = K_B_init;
+      lc.K_A = K_A; lc.K_B = K_B;
+      lc.last_tanh_A = last_tanh_A; lc.last_ln_A_cache = last_ln_A_cache;
+      lc.last_tanh_B = last_tanh_B; lc.last_ln_B_cache = last_ln_B_cache;
+      K_A_final = K_A; K_B_final = K_B;
+
+      // ── (5) HELICAL STATE — K_combined informs progression ─────────
+      const h_rotated = givensRotate(h, this.layers_thetas[l]);
+      const K_combined_l = new Float32Array(dim);
+      for (let j = 0; j < dim; j++) K_combined_l[j] = 0.5 * (K_A[j] + K_B[j]);
+      const px_input = concat3(h, K_combined_l, e);
+      const px_pre = matvecTernary(this.layers_W_px[l], px_input, dim, 3*dim);
+      const px_tanh = tanh_v(px_pre);
+      const P = matvecTernary(this.layers_W_prog[l], px_tanh, dim, dim);
+      const h_new = vecadd(h_rotated, P);
+
+      lc.h_prev = h.slice(); lc.h_rotated = h_rotated;
+      lc.K_combined = K_combined_l;
+      lc.px_input = px_input; lc.px_pre = px_pre; lc.px_tanh = px_tanh;
+      lc.P = P; lc.h_new = h_new;
+      h = h_new;
+      caches.layers.push(lc);
+    }
+
+    caches.K_A_final = K_A_final; caches.K_B_final = K_B_final;
+    caches.h_new = h;
+    caches.fpItersAvg = totalFPIters / numLayers;
+    caches.fpAgreeAvg = totalFPAgree / numLayers;
+    caches.aSymItersAvg = totalASymIters / numLayers;
+    caches.aAct = act_count > 0 ? a_act_sum / act_count : 0;
+    caches.bAct = act_count > 0 ? b_act_sum / act_count : 0;
+
+    // ── (4) DYADIC RECORD UPDATE ──────────────────────────────────────
+    const S_A_start = recordEntropy(R_A_prev);
+    const S_B_start = recordEntropy(R_B_prev);
+    const Ka_contrib = matvecTernary(this.W_rec_A, K_A_final, dim, dim);
+    const cross_A   = matvecTernary(this.W_cross_A, R_B_prev, dim, dim);
+    const R_A_sum   = new Float32Array(dim);
+    for (let j = 0; j < dim; j++) R_A_sum[j] = R_A_prev[j] + Ka_contrib[j] + cross_A[j];
+    const { out: R_A_new, cache: ln_recA_cache } = layerNorm(R_A_sum, this.ln_recA_gamma, this.ln_recA_beta);
+    const Kb_contrib = matvecTernary(this.W_rec_B, K_B_final, dim, dim);
+    const cross_B   = matvecTernary(this.W_cross_B, R_A_prev, dim, dim);
+    const R_B_sum   = new Float32Array(dim);
+    for (let j = 0; j < dim; j++) R_B_sum[j] = R_B_prev[j] + Kb_contrib[j] + cross_B[j];
+    const { out: R_B_new, cache: ln_recB_cache } = layerNorm(R_B_sum, this.ln_recB_gamma, this.ln_recB_beta);
+
+    caches.Ka_contrib = Ka_contrib; caches.cross_A = cross_A;
+    caches.R_A_sum = R_A_sum; caches.ln_recA_cache = ln_recA_cache; caches.R_A_new = R_A_new;
+    caches.Kb_contrib = Kb_contrib; caches.cross_B = cross_B;
+    caches.R_B_sum = R_B_sum; caches.ln_recB_cache = ln_recB_cache; caches.R_B_new = R_B_new;
+
+    const R_combined_new = new Float32Array(dim);
+    for (let j = 0; j < dim; j++) R_combined_new[j] = 0.5 * (R_A_new[j] + R_B_new[j]);
+    caches.R_combined_new = R_combined_new;
+    const logits = matvecTernary(this.W_frontier, R_combined_new, this.vocab, dim);
+
+    const S_A_end = recordEntropy(R_A_new);
+    const S_B_end = recordEntropy(R_B_new);
+    const newHistory = [...tokenHistory, tokenId];
+    if (newHistory.length > this.K_hist) newHistory.shift();
+
+    return {
+      logits,
+      state: { h, R_A: R_A_new, R_B: R_B_new, tokenHistory: newHistory },
+      caches,
+      diagnostics: {
+        fpItersAvg: caches.fpItersAvg, fpAgreeAvg: caches.fpAgreeAvg,
+        aSymItersAvg: caches.aSymItersAvg,
+        rAEntropy: S_A_end, rBEntropy: S_B_end,
+        fEntropy: entropy(softmax(logits)),
+        aAct: caches.aAct, bAct: caches.bAct,
+        dSA: S_A_end - S_A_start, dSB: S_B_end - S_B_start
+      }
+    };
+  }
+
+  backward(grad_logits, caches, cfg) {
+    const { dim, vocab, numLayers } = this;
+    // N_NEUMANN: Neumann series terms for FP gradient correction.
+    // 2 terms ≈ 81% error reduction vs STE (given spectralNorm ≤ 0.9).
+    const N_NEUMANN = cfg.nNeumann !== undefined ? cfg.nNeumann : 2;
+
+    // ── FRONTIER ──────────────────────────────────────────────────────
+    let absSum_f = 0;
+    for (let i = 0; i < this.W_frontier.length; i++) absSum_f += Math.abs(this.W_frontier[i]);
+    const scale_f = absSum_f / (this.W_frontier.length + 1e-8);
+    const grad_R_combined = matvecT(this.W_frontier, grad_logits, vocab, dim);
+    for (let j = 0; j < dim; j++) grad_R_combined[j] *= scale_f;
+    outerAccum(this.W_frontier_grad, caches.R_combined_new, grad_logits, vocab, dim);
+    const grad_R_A_new = new Float32Array(dim);
+    const grad_R_B_new = new Float32Array(dim);
+    for (let j = 0; j < dim; j++) {
+      grad_R_A_new[j] = 0.5 * grad_R_combined[j];
+      grad_R_B_new[j] = 0.5 * grad_R_combined[j];
+    }
+
+    // ── THERMODYNAMIC ────────────────────────────────────────────────
+    const lam = cfg.lambda;
+    if (lam > 0) {
+      const pA = softmax(caches.R_A_new); const SA = entropy(pA);
+      const pB = softmax(caches.R_B_new); const SB = entropy(pB);
+      for (let j = 0; j < dim; j++) {
+        grad_R_A_new[j] += -lam * pA[j] * (SA - Math.log(pA[j] + 1e-10));
+        grad_R_B_new[j] += -lam * pB[j] * (SB - Math.log(pB[j] + 1e-10));
+      }
+    }
+
+    // ── DYADIC RECORD backward ────────────────────────────────────────
+    const { grad_x: grad_R_A_sum, grad_gamma: dg_recA, grad_beta: db_recA } =
+      layerNormBackward(grad_R_A_new, caches.ln_recA_cache, this.ln_recA_gamma);
+    vecaddInPlace(this.ln_recA_gamma_grad, dg_recA);
+    vecaddInPlace(this.ln_recA_beta_grad, db_recA);
+    let s_recA = 0; for (const w of this.W_rec_A) s_recA += Math.abs(w);
+    const sc_recA = s_recA / (this.W_rec_A.length + 1e-8);
+    let s_cxA = 0; for (const w of this.W_cross_A) s_cxA += Math.abs(w);
+    const sc_cxA = s_cxA / (this.W_cross_A.length + 1e-8);
+    const grad_K_A_record = matvecT(this.W_rec_A, grad_R_A_sum, dim, dim);
+    for (let j = 0; j < dim; j++) grad_K_A_record[j] *= sc_recA;
+    outerAccum(this.W_rec_A_grad, caches.K_A_final, grad_R_A_sum, dim, dim);
+    const grad_R_B_from_cxA = matvecT(this.W_cross_A, grad_R_A_sum, dim, dim);
+    for (let j = 0; j < dim; j++) grad_R_B_from_cxA[j] *= sc_cxA;
+    outerAccum(this.W_cross_A_grad, caches.R_B_prev, grad_R_A_sum, dim, dim);
+    let grad_R_A_prev = grad_R_A_sum.slice();
+
+    const { grad_x: grad_R_B_sum, grad_gamma: dg_recB, grad_beta: db_recB } =
+      layerNormBackward(grad_R_B_new, caches.ln_recB_cache, this.ln_recB_gamma);
+    vecaddInPlace(this.ln_recB_gamma_grad, dg_recB);
+    vecaddInPlace(this.ln_recB_beta_grad, db_recB);
+    let s_recB = 0; for (const w of this.W_rec_B) s_recB += Math.abs(w);
+    const sc_recB = s_recB / (this.W_rec_B.length + 1e-8);
+    let s_cxB = 0; for (const w of this.W_cross_B) s_cxB += Math.abs(w);
+    const sc_cxB = s_cxB / (this.W_cross_B.length + 1e-8);
+    const grad_K_B_record = matvecT(this.W_rec_B, grad_R_B_sum, dim, dim);
+    for (let j = 0; j < dim; j++) grad_K_B_record[j] *= sc_recB;
+    outerAccum(this.W_rec_B_grad, caches.K_B_final, grad_R_B_sum, dim, dim);
+    const grad_R_A_from_cxB = matvecT(this.W_cross_B, grad_R_B_sum, dim, dim);
+    for (let j = 0; j < dim; j++) grad_R_A_from_cxB[j] *= sc_cxB;
+    outerAccum(this.W_cross_B_grad, caches.R_A_prev, grad_R_B_sum, dim, dim);
+    let grad_R_B_prev = grad_R_B_sum.slice();
+    for (let j = 0; j < dim; j++) {
+      grad_R_B_prev[j] += grad_R_B_from_cxA[j];
+      grad_R_A_prev[j] += grad_R_A_from_cxB[j];
+    }
+
+    // ── LAYERS backward ───────────────────────────────────────────────
+    let grad_h = zeros(dim);
+    // FIX 1: exact grad_e accumulated from all layers' helical px path
+    const grad_e_accum = new Float32Array(dim);
+    // FIX 2: grad through suffix_sig accumulated from all layers' Component A
+    const grad_suffix_accum = new Float32Array(dim);
+
+    for (let l = numLayers - 1; l >= 0; l--) {
+      const lc = caches.layers[l];
+
+      // HELICAL backward
+      const { grad_h: grad_h_from_givens, grad_theta } =
+        givensRotateBackward(lc.h_prev, this.layers_thetas[l], grad_h.slice());
+      vecaddInPlace(this.layers_thetas_grad[l], grad_theta);
+
+      let sp = 0; for (const w of this.layers_W_prog[l]) sp += Math.abs(w);
+      const sc_prog = sp / (this.layers_W_prog[l].length + 1e-8);
+      const grad_px_tanh = matvecT(this.layers_W_prog[l], grad_h, dim, dim);
+      for (let j = 0; j < dim; j++) grad_px_tanh[j] *= sc_prog;
+      outerAccum(this.layers_W_prog_grad[l], lc.px_tanh, grad_h, dim, dim);
+      const grad_px_pre = new Float32Array(dim);
+      for (let j = 0; j < dim; j++) grad_px_pre[j] = grad_px_tanh[j] * (1 - lc.px_tanh[j]*lc.px_tanh[j]);
+
+      let spx = 0; for (const w of this.layers_W_px[l]) spx += Math.abs(w);
+      const sc_px = spx / (this.layers_W_px[l].length + 1e-8);
+      const grad_px_in = matvecT(this.layers_W_px[l], grad_px_pre, dim, 3*dim);
+      for (let j = 0; j < 3*dim; j++) grad_px_in[j] *= sc_px;
+      outerAccum(this.layers_W_px_grad[l], lc.px_input, grad_px_pre, dim, 3*dim);
+
+      const grad_h_from_prog = grad_px_in.slice(0, dim);
+      const grad_Kc = grad_px_in.slice(dim, 2*dim);
+      // FIX 1: collect grad_e from this layer's px path (slot [2*dim..3*dim])
+      for (let j = 0; j < dim; j++) grad_e_accum[j] += grad_px_in[2*dim + j];
+
+      // K_combined = 0.5*(K_A+K_B) backward
+      const grad_K_A_prog = new Float32Array(dim);
+      const grad_K_B_prog = new Float32Array(dim);
+      for (let j = 0; j < dim; j++) {
+        grad_K_A_prog[j] = 0.5 * grad_Kc[j];
+        grad_K_B_prog[j] = 0.5 * grad_Kc[j];
+      }
+
+      // K grad: prog path (all layers) + record (last layer only)
+      const grad_K_A_this = grad_K_A_prog.slice();
+      const grad_K_B_this = grad_K_B_prog.slice();
+      if (l === numLayers - 1) {
+        for (let j = 0; j < dim; j++) {
+          grad_K_A_this[j] += grad_K_A_record[j];
+          grad_K_B_this[j] += grad_K_B_record[j];
+        }
+      }
+
+      // FIX 4a: Neumann correction for dyadic FP
+      // At the fixed point: K_A* = F_A(K_B*), K_B* = F_B(K_A*)
+      // N-term Neumann: accumulates cross-Jacobian contributions
+      // ρ(J_AB)·ρ(J_BA) ≤ 0.81 (from spectralNorm), so series converges quickly
+      if (N_NEUMANN > 0 && lc.last_tanh_A && lc.last_tanh_B) {
+        let gA = grad_K_A_this.slice(), gB = grad_K_B_this.slice();
+        for (let n = 0; n < N_NEUMANN; n++) {
+          const corrA = this._fpJacobianT(gB, lc.last_tanh_A, lc.last_ln_A_cache,
+                          this.layers_W_FA[l], this.layers_ln_fpA_gamma[l]);
+          const corrB = this._fpJacobianT(gA, lc.last_tanh_B, lc.last_ln_B_cache,
+                          this.layers_W_FB[l], this.layers_ln_fpB_gamma[l]);
+          const gA_new = new Float32Array(dim);
+          const gB_new = new Float32Array(dim);
+          for (let j = 0; j < dim; j++) {
+            gA_new[j] = grad_K_A_this[j] + corrA[j];
+            gB_new[j] = grad_K_B_this[j] + corrB[j];
+          }
+          gA = gA_new; gB = gB_new;
+        }
+        for (let j = 0; j < dim; j++) { grad_K_A_this[j] = gA[j]; grad_K_B_this[j] = gB[j]; }
+      }
+
+      // Gate + Turing core backward
+      const grad_a = new Float32Array(dim);
+      const grad_b = new Float32Array(dim);
+      const grad_gA = new Float32Array(dim);
+      const grad_gB = new Float32Array(dim);
+      for (let j = 0; j < dim; j++) {
+        grad_a[j]  = lc.gA[j] * grad_K_A_this[j];
+        grad_gA[j] = lc.a_t[j] * grad_K_A_this[j];
+        grad_b[j]  = lc.gB[j] * grad_K_B_this[j];
+        grad_gB[j] = lc.b_t[j] * grad_K_B_this[j];
+      }
+      const grad_gA_pre = new Float32Array(dim);
+      const grad_gB_pre = new Float32Array(dim);
+      for (let j = 0; j < dim; j++) {
+        grad_gA_pre[j] = grad_gA[j] * lc.gA[j] * (1 - lc.gA[j]);
+        grad_gB_pre[j] = grad_gB[j] * lc.gB[j] * (1 - lc.gB[j]);
+      }
+      outerAccum(this.layers_W_gA_grad[l], lc.b_t, grad_gA_pre, dim, dim);
+      outerAccum(this.layers_W_gB_grad[l], lc.a_t, grad_gB_pre, dim, dim);
+
+      // Component A backward: LN → tanh
+      const { grad_x: grad_ln_asym, grad_gamma: dg_fpAsym, grad_beta: db_fpAsym } =
+        layerNormBackward(grad_a, lc.innerFPLnCache, this.layers_ln_fpAsym_gamma[l]);
+      vecaddInPlace(this.layers_ln_fpAsym_gamma_grad[l], dg_fpAsym);
+      vecaddInPlace(this.layers_ln_fpAsym_beta_grad[l], db_fpAsym);
+
+      // FIX 4b: Neumann correction for inner FP (symbolic pattern recognizer)
+      // K* = F(K*, suffix_sig) — correct for implicit K* dependence on K*
+      let grad_a_ln = grad_ln_asym.slice();
+      if (N_NEUMANN > 0) {
+        let g = grad_ln_asym.slice();
+        for (let n = 0; n < N_NEUMANN; n++) {
+          const corr = this._innerFPJacobianT(g, lc.innerFPPreTanh, lc.innerFPLnCache,
+                         this.layers_W_A[l], this.layers_ln_fpAsym_gamma[l]);
+          const g_new = new Float32Array(dim);
+          for (let j = 0; j < dim; j++) g_new[j] = grad_ln_asym[j] + corr[j];
+          g = g_new;
+        }
+        grad_a_ln = g;
+      }
+
+      const grad_a_pre = new Float32Array(dim);
+      for (let j = 0; j < dim; j++)
+        grad_a_pre[j] = grad_a_ln[j] * (1 - lc.innerFPPreTanh[j]*lc.innerFPPreTanh[j]);
+
+      // W_A backward: get full 2*dim gradient to extract suffix contribution (FIX 2)
+      outerAccum(this.layers_W_A_grad[l], lc.innerFPInput, grad_a_pre, dim, 2*dim);
+      let s_wa = 0; for (const w of this.layers_W_A[l]) s_wa += Math.abs(w);
+      const sc_wa = s_wa / (this.layers_W_A[l].length + 1e-8);
+      const grad_inner_full = matvecT(this.layers_W_A[l], grad_a_pre, dim, 2*dim);
+      for (let j = 0; j < 2*dim; j++) grad_inner_full[j] *= sc_wa;
+      // FIX 2: accumulate suffix_sig gradient (second dim block of inner input)
+      for (let j = 0; j < dim; j++) grad_suffix_accum[j] += grad_inner_full[dim + j];
+
+      // Component B backward
+      let swb = 0; for (const w of this.layers_W_B[l]) swb += Math.abs(w);
+      const sc_wb = swb / (this.layers_W_B[l].length + 1e-8);
+      const grad_b_pre = new Float32Array(dim);
+      for (let j = 0; j < dim; j++) grad_b_pre[j] = grad_b[j] * (1 - lc.b_t[j]*lc.b_t[j]);
+      outerAccum(this.layers_W_B_grad[l], lc.b_input, grad_b_pre, dim, 2*dim);
+      const grad_b_in = matvecT(this.layers_W_B[l], grad_b_pre, dim, 2*dim);
+      for (let j = 0; j < 2*dim; j++) grad_b_in[j] *= sc_wb;
+      const grad_h_from_B = grad_b_in.slice(0, dim);
+      const grad_Rc_from_B = grad_b_in.slice(dim, 2*dim);
+      for (let j = 0; j < dim; j++) {
+        grad_R_A_prev[j] += 0.5 * grad_Rc_from_B[j];
+        grad_R_B_prev[j] += 0.5 * grad_Rc_from_B[j];
+      }
+
+      grad_h = new Float32Array(dim);
+      for (let j = 0; j < dim; j++)
+        grad_h[j] = grad_h_from_givens[j] + grad_h_from_prog[j] + grad_h_from_B[j];
+    }
+
+    // FIX 1: Exact W_rel backward using accumulated grad_e (replaces proxy)
+    let s_rel = 0; for (const w of this.W_rel) s_rel += Math.abs(w);
+    const sc_rel = s_rel / (this.W_rel.length + 1e-8);
+    outerAccum(this.W_rel_grad, caches.R_combined_prev, grad_e_accum, dim, dim);
+    const grad_R_comb_from_rel = matvecT(this.W_rel, grad_e_accum, dim, dim);
+    for (let j = 0; j < dim; j++) {
+      grad_R_comb_from_rel[j] *= sc_rel;
+      grad_R_A_prev[j] += 0.5 * grad_R_comb_from_rel[j];
+      grad_R_B_prev[j] += 0.5 * grad_R_comb_from_rel[j];
+    }
+    // FIX 1b: W_embed gradient from embedding path (current token)
+    const baseEmbed = caches.tokenId * dim;
+    for (let j = 0; j < dim; j++) this.W_embed_grad[baseEmbed + j] += grad_e_accum[j];
+
+    // FIX 2: W_embed gradient from suffix_sig path
+    // Distributes grad_suffix_accum to tokenHistory rows weighted by _suffixSig construction
+    const sfxHist = caches.suffix_hist;
+    if (sfxHist) {
+      const n_h = Math.min(sfxHist.length, this.K_hist);
+      if (n_h > 0) {
+        const n_sq = n_h * n_h;
+        for (let k = 0; k < n_h; k++) {
+          const wgt = (k + 1) / n_sq;
+          const tok_k = sfxHist[sfxHist.length - n_h + k];
+          const eb = tok_k * dim;
+          for (let j = 0; j < dim; j++) this.W_embed_grad[eb + j] += wgt * grad_suffix_accum[j];
+        }
+      }
+    }
+
+    return { grad_R_A_prev, grad_R_B_prev, grad_h };
+  }
+
+  zeroGrads() {
+    this.W_embed_grad.fill(0); this.W_rel_grad.fill(0);
+    this.W_rec_A_grad.fill(0); this.W_rec_B_grad.fill(0);
+    this.W_cross_A_grad.fill(0); this.W_cross_B_grad.fill(0);
+    this.W_frontier_grad.fill(0);
+    this.ln_recA_gamma_grad.fill(0); this.ln_recA_beta_grad.fill(0);
+    this.ln_recB_gamma_grad.fill(0); this.ln_recB_beta_grad.fill(0);
+    for (let l = 0; l < this.numLayers; l++) {
+      this.layers_W_A_grad[l].fill(0); this.layers_W_B_grad[l].fill(0);
+      this.layers_W_gA_grad[l].fill(0); this.layers_W_gB_grad[l].fill(0);
+      this.layers_W_FA_grad[l].fill(0); this.layers_W_FB_grad[l].fill(0);
+      this.layers_ln_fpA_gamma_grad[l].fill(0); this.layers_ln_fpA_beta_grad[l].fill(0);
+      this.layers_ln_fpB_gamma_grad[l].fill(0); this.layers_ln_fpB_beta_grad[l].fill(0);
+      this.layers_ln_fpAsym_gamma_grad[l].fill(0); this.layers_ln_fpAsym_beta_grad[l].fill(0);
+      this.layers_thetas_grad[l].fill(0);
+      this.layers_W_prog_grad[l].fill(0); this.layers_W_px_grad[l].fill(0);
+    }
+  }
+
+  getTernaryStats() {
+    let neg = 0, zero_w = 0, pos = 0, total = 0;
+    const checkW = (W) => {
+      let absSum = 0;
+      for (let i = 0; i < W.length; i++) absSum += Math.abs(W[i]);
+      const thr = 0.5 * absSum / (W.length + 1e-8);
+      for (let i = 0; i < W.length; i++) {
+        if (W[i] > thr) pos++;
+        else if (W[i] < -thr) neg++;
+        else zero_w++;
+        total++;
+      }
+    };
+    checkW(this.W_rel); checkW(this.W_frontier);
+    checkW(this.W_rec_A); checkW(this.W_rec_B);
+    checkW(this.W_cross_A); checkW(this.W_cross_B);
+    for (let l = 0; l < this.numLayers; l++) {
+      checkW(this.layers_W_A[l]); checkW(this.layers_W_B[l]);
+      checkW(this.layers_W_gA[l]); checkW(this.layers_W_gB[l]);
+      checkW(this.layers_W_FA[l]); checkW(this.layers_W_FB[l]);
+      checkW(this.layers_W_prog[l]); checkW(this.layers_W_px[l]);
+    }
+    return { neg: neg/total, zero: zero_w/total, pos: pos/total };
+  }
+
+  getAlignmentDiag() {
+    // Computes separate ternary bias for R_A-side and R_B-side record weights.
+    // Hypothesis: recA_bias → + (forward-chiral), recB_bias → − (backward-chiral)
+    // when R_A and R_B are learning genuinely opposite traversal directions.
+    // divergence ≈ 0 means cross-coupling has collapsed them into the same chirality.
+    const ternaryBias = (W) => {
+      let absSum = 0;
+      for (let i = 0; i < W.length; i++) absSum += Math.abs(W[i]);
+      const thr = 0.5 * absSum / (W.length + 1e-8);
+      let neg = 0, pos = 0;
+      for (let i = 0; i < W.length; i++) {
+        if (W[i] > thr) pos++;
+        else if (W[i] < -thr) neg++;
+      }
+      return (pos - neg) / W.length;  // + = excitatory bias, − = inhibitory bias
+    };
+    const rA_bias  = ternaryBias(this.W_rec_A);
+    const rB_bias  = ternaryBias(this.W_rec_B);
+    const cxA_bias = ternaryBias(this.W_cross_A);
+    const cxB_bias = ternaryBias(this.W_cross_B);
+    return {
+      rA_bias,                         // want: positive (forward)
+      rB_bias,                         // want: negative (backward)
+      divergence: rA_bias - rB_bias,   // want: growing; 0 = collapsed
+      cxA_bias,                        // cross-coupling A (R_B → R_A update)
+      cxB_bias,                        // cross-coupling B (R_A → R_B update)
+    };
+  }
+
+  // ── TODO: INFERENCE INTERFACE ──────────────────────────────────────────
+  // v0.1: add generate(prompt, cfg) as a clean public method.
+  // Needs: token window size tracking (current tokenHistory is K_hist=8, too short for chat),
+  // temperature/top-p sampling as part of cfg, streaming output via callback.
+  // Chat-relevant hyperparameters to expose: context_window (default 512+),
+  // repetition_penalty, stop_tokens, max_new_tokens.
+  // Token count measure: track total tokens generated per session for rate/cost monitoring.
+
+  // ── TODO: ALIGNMENT DIAGNOSTIC ─────────────────────────────────────────
+  // Check whether bidirectional R_A/R_B produces different chiral signatures
+  // than unidirectional. Hypothesis: R_A will show forward-bias (+1 dominant),
+  // R_B will show backward-bias (-1 dominant) if they're truly learning different
+  // traversal directions. If they converge to same chirality, that's evidence the
+  // cross-coupling is collapsing them. Track R_A and R_B ternary stats separately.
+
+  // ── TODO: TOKEN WINDOW DIAGNOSTIC ─────────────────────────────────────
+  // Add a rolling measure of effective context: how far back does the record state
+  // retain information? Probe by computing correlation between R_A states at distance
+  // d apart. When correlation drops below threshold, that's the effective window.
+  // This is the architectural analog of "context length" for transformer models.
+}
+
+
+function adamwStep(W, grad, m1, m2, step, lr, beta1=0.9, beta2=0.999, eps=1e-8, wd=0.01) {
+  const t = step;
+  const bc1 = 1 - Math.pow(beta1, t);
+  const bc2 = 1 - Math.pow(beta2, t);
+  for (let i = 0; i < W.length; i++) {
+    m1[i] = beta1 * m1[i] + (1-beta1) * grad[i];
+    m2[i] = beta2 * m2[i] + (1-beta2) * grad[i] * grad[i];
+    const m1h = m1[i] / bc1;
+    const m2h = m2[i] / bc2;
+    W[i] = W[i] * (1 - lr * wd) - lr * m1h / (Math.sqrt(m2h) + eps);
+  }
+}
+
+function clipGradNorm(grads, maxNorm) {
+  let totalNorm = 0;
+  for (const g of grads) for (let i = 0; i < g.length; i++) totalNorm += g[i]*g[i];
+  totalNorm = Math.sqrt(totalNorm);
+  if (totalNorm > maxNorm) {
+    const scale = maxNorm / (totalNorm + 1e-6);
+    for (const g of grads) for (let i = 0; i < g.length; i++) g[i] *= scale;
+  }
+}
+
+function optimizerStep(model, step, lr) {
+  const PHI = (1 + Math.sqrt(5)) / 2;
+  const clipVal = 1.0;
+
+  const allGrads = [model.W_rel_grad,
+                    model.W_rec_A_grad, model.W_rec_B_grad,
+                    model.W_cross_A_grad, model.W_cross_B_grad,
+                    model.W_frontier_grad,
+                    model.ln_recA_gamma_grad, model.ln_recA_beta_grad,
+                    model.ln_recB_gamma_grad, model.ln_recB_beta_grad];
+  for (let l = 0; l < model.numLayers; l++) {
+    allGrads.push(model.layers_W_A_grad[l], model.layers_W_B_grad[l],
+                  model.layers_W_gA_grad[l], model.layers_W_gB_grad[l],
+                  model.layers_W_FA_grad[l], model.layers_W_FB_grad[l],
+                  model.layers_ln_fpA_gamma_grad[l], model.layers_ln_fpA_beta_grad[l],
+                  model.layers_ln_fpB_gamma_grad[l], model.layers_ln_fpB_beta_grad[l],
+                  model.layers_ln_fpAsym_gamma_grad[l], model.layers_ln_fpAsym_beta_grad[l],
+                  model.layers_thetas_grad[l],
+                  model.layers_W_prog_grad[l], model.layers_W_px_grad[l]);
+  }
+  clipGradNorm(allGrads, clipVal);
+
+  adamwStep(model.W_rel, model.W_rel_grad, model.W_rel_m1, model.W_rel_m2, step, lr);
+  adamwStep(model.W_rec_A, model.W_rec_A_grad, model.W_rec_A_m1, model.W_rec_A_m2, step, lr);
+  adamwStep(model.W_rec_B, model.W_rec_B_grad, model.W_rec_B_m1, model.W_rec_B_m2, step, lr);
+  adamwStep(model.W_cross_A, model.W_cross_A_grad, model.W_cross_A_m1, model.W_cross_A_m2, step, lr);
+  adamwStep(model.W_cross_B, model.W_cross_B_grad, model.W_cross_B_m1, model.W_cross_B_m2, step, lr);
+  adamwStep(model.W_frontier, model.W_frontier_grad, model.W_frontier_m1, model.W_frontier_m2, step, lr);
+  adamwStep(model.ln_recA_gamma, model.ln_recA_gamma_grad, model.ln_recA_gamma_m1, model.ln_recA_gamma_m2, step, lr*0.1);
+  adamwStep(model.ln_recA_beta, model.ln_recA_beta_grad, model.ln_recA_beta_m1, model.ln_recA_beta_m2, step, lr*0.1);
+  adamwStep(model.ln_recB_gamma, model.ln_recB_gamma_grad, model.ln_recB_gamma_m1, model.ln_recB_gamma_m2, step, lr*0.1);
+  adamwStep(model.ln_recB_beta, model.ln_recB_beta_grad, model.ln_recB_beta_m1, model.ln_recB_beta_m2, step, lr*0.1);
+
+  for (let l = 0; l < model.numLayers; l++) {
+    // Asymmetric gate gradient clipping — enforces Turing minimum coupling ratio φ
+    const gA_g = model.layers_W_gA_grad[l];
+    const gB_g = model.layers_W_gB_grad[l];
+    const gAmax = App.phiClip === false ? clipVal : clipVal*PHI;   // v0.0009: symmetric control when unchecked
+    const gBmax = App.phiClip === false ? clipVal : clipVal/PHI;
+    for (let i = 0; i < gA_g.length; i++) {
+      gA_g[i] = Math.max(-gAmax, Math.min(gAmax, gA_g[i]));
+      gB_g[i] = Math.max(-gBmax, Math.min(gBmax, gB_g[i]));
+    }
+    adamwStep(model.layers_W_A[l], model.layers_W_A_grad[l], model.layers_W_A_m1[l], model.layers_W_A_m2[l], step, lr);
+    adamwStep(model.layers_W_B[l], model.layers_W_B_grad[l], model.layers_W_B_m1[l], model.layers_W_B_m2[l], step, lr);
+    adamwStep(model.layers_W_gA[l], gA_g, model.layers_W_gA_m1[l], model.layers_W_gA_m2[l], step, lr);
+    adamwStep(model.layers_W_gB[l], gB_g, model.layers_W_gB_m1[l], model.layers_W_gB_m2[l], step, lr);
+    adamwStep(model.layers_W_FA[l], model.layers_W_FA_grad[l], model.layers_W_FA_m1[l], model.layers_W_FA_m2[l], step, lr);
+    adamwStep(model.layers_W_FB[l], model.layers_W_FB_grad[l], model.layers_W_FB_m1[l], model.layers_W_FB_m2[l], step, lr);
+    adamwStep(model.layers_ln_fpA_gamma[l], model.layers_ln_fpA_gamma_grad[l], model.layers_ln_fpA_gamma_m1[l], model.layers_ln_fpA_gamma_m2[l], step, lr*0.1);
+    adamwStep(model.layers_ln_fpA_beta[l], model.layers_ln_fpA_beta_grad[l], model.layers_ln_fpA_beta_m1[l], model.layers_ln_fpA_beta_m2[l], step, lr*0.1);
+    adamwStep(model.layers_ln_fpB_gamma[l], model.layers_ln_fpB_gamma_grad[l], model.layers_ln_fpB_gamma_m1[l], model.layers_ln_fpB_gamma_m2[l], step, lr*0.1);
+    adamwStep(model.layers_ln_fpB_beta[l], model.layers_ln_fpB_beta_grad[l], model.layers_ln_fpB_beta_m1[l], model.layers_ln_fpB_beta_m2[l], step, lr*0.1);
+    adamwStep(model.layers_ln_fpAsym_gamma[l], model.layers_ln_fpAsym_gamma_grad[l], model.layers_ln_fpAsym_gamma_m1[l], model.layers_ln_fpAsym_gamma_m2[l], step, lr*0.1);
+    adamwStep(model.layers_ln_fpAsym_beta[l], model.layers_ln_fpAsym_beta_grad[l], model.layers_ln_fpAsym_beta_m1[l], model.layers_ln_fpAsym_beta_m2[l], step, lr*0.1);
+    adamwStep(model.layers_thetas[l], model.layers_thetas_grad[l], model.layers_thetas_m1[l], model.layers_thetas_m2[l], step, lr);
+    adamwStep(model.layers_W_prog[l], model.layers_W_prog_grad[l], model.layers_W_prog_m1[l], model.layers_W_prog_m2[l], step, lr);
+    adamwStep(model.layers_W_px[l], model.layers_W_px_grad[l], model.layers_W_px_m1[l], model.layers_W_px_m2[l], step, lr);
+  }
+}
+
+/* ── Token Window Diagnostic ─────────────────────────────────────────────
+   Probes rolling R_A buffer for cosine similarity vs lag distance.
+   Returns the lag at which similarity first drops below threshold (0.5).
+   This is the architectural analog of "context length" — how far back the
+   record state retains information about prior tokens.                     */
+function computeEffectiveWindow(buffer, threshold = 0.5) {
+  const n = buffer.length;
+  if (n < 4) return 0;
+  const ref = buffer[n - 1];
+  let refNorm = 0;
+  for (let i = 0; i < ref.length; i++) refNorm += ref[i] * ref[i];
+  refNorm = Math.sqrt(refNorm);
+  if (refNorm < 1e-8) return 0;
+  const maxLag = Math.min(n - 1, 128);
+  for (let lag = 1; lag <= maxLag; lag++) {
+    const old = buffer[n - 1 - lag];
+    let dot = 0, oldNorm = 0;
+    for (let i = 0; i < ref.length; i++) {
+      dot += ref[i] * old[i];
+      oldNorm += old[i] * old[i];
+    }
+    oldNorm = Math.sqrt(oldNorm);
+    const sim = dot / (refNorm * oldNorm + 1e-8);
+    if (sim < threshold) return lag;
+  }
+  return maxLag;  // effective window exceeds buffer depth
+}
+
+function cosineLR(step, lrStart, lrMin, warmup, total) {
+  if (step < warmup) return lrStart * (step / Math.max(1, warmup));
+  const t = (step - warmup) / Math.max(1, total - warmup);
+  return lrMin + 0.5 * (lrStart - lrMin) * (1 + Math.cos(Math.PI * Math.min(t, 1)));
+}
+
+/* ╔══════════════════════════════════════════════════════╗
+   ║          TRAINING LOOP (BPTT)                         ║
+   ╚══════════════════════════════════════════════════════╝ */
+
+const App = {
+  model: null,
+  corpus: null,
+  trainState: null,
+  step: 0,
+  totalSteps: 4000,
+  training: false,
+  paused: false,
+  lossHistory: [],
+  thermoHistory: [],
+  lastDiag: null,
+  modelLoaded: false,      // true after import — prevents startTraining from reinit
+  // v0.0009 experiment controls
+  seed: 0, rbMode: 'causal', shuffleMode: 'none', valFrac: 0.1, valEvery: 50, nValChunks: 6, phiClip: true,
+  corpusAll: null, val: null, unigramBaseline: null, lastVal: null,
+  prevScoutRB: null, _prevStart: undefined, alignDiag0: null,
+  // Token counter
+  tokenStats: { corpusTotal: 0, sessionIn: 0, sessionOut: 0, sessionContext: 0, trnTps: 0, infTps: 0 },
+  // Chat state
+  chatState: null,         // { h, R_A, R_B, tokenHistory } — persists across turns
+  chatHistory: [],         // [{role, text, tokensIn, tokensOut}]
+  chatSeeded: false,       // true after seed prompt has been processed
+  // Alignment + window diagnostics (v0.0008)
+  rABuffer: [],            // rolling R_A snapshots for token window diagnostic
+  effectiveWindow: 0,      // lag at which R_A cosine similarity < 0.5
+  lastAlignDiag: null,     // { rA_bias, rB_bias, divergence, cxA_bias, cxB_bias }
+};
+
+function updateTokenPill() {
+  const t = App.tokenStats;
+  const fmt = n => n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n);
+  document.getElementById('tc-corpus').textContent = fmt(t.corpusTotal);
+  document.getElementById('tc-in').textContent = fmt(t.sessionIn);
+  document.getElementById('tc-out').textContent = fmt(t.sessionOut);
+  document.getElementById('tc-ctx').textContent = fmt(t.sessionContext);
+  if (App.model) document.getElementById('tc-params').textContent = fmt(App.model.getParamCount());
+  if (t.trnTps > 0) document.getElementById('tc-trntps').textContent = t.trnTps.toFixed(0);
+  if (t.infTps > 0) document.getElementById('tc-inftps').textContent = t.infTps.toFixed(1);
+}
+
+async function yieldToMain() { await new Promise(r => setTimeout(r, 0)); }
+
+// ── BACKWARD SCOUT ────────────────────────────────────────────────────────
+// Runs the chunk in reverse to collect R_B states at each position.
+// These are injected into the main forward pass so R_A sees genuine future context
+// via W_cross_A·R_B. Stop-gradient: R_B is frozen from scout (no backprop through it).
+// TODO [v0.1 TIGHTEN]: make R_B trainable via a second backward pass through the scout.
+function scoutBackwardPass(tokens, model, cfg) {
+  // FIX 3: now also collects caches + logits for scout BPTT
+  // The scout is a reversed LM: processes tokens right-to-left,
+  // predicts tokens[t] given tokens[t+1..len] at each step.
+  const len = tokens.length - 1;
+  let scoutState = model.getEmptyState();
+  const R_B_at = new Array(len + 1);
+  const scoutCaches = new Array(len);
+  const scoutLogits = new Array(len);
+  const scoutTargets = new Array(len);
+  R_B_at[len] = scoutState.R_B.slice();
+
+  for (let t = len - 1; t >= 0; t--) {
+    const { logits, state: ns, caches } = model.forward(tokens[t + 1], scoutState, cfg);
+    scoutCaches[t] = caches;
+    scoutLogits[t] = logits;
+    scoutTargets[t] = tokens[t];  // predict what came before in the original sequence
+    scoutState = ns;
+    R_B_at[t] = scoutState.R_B.slice();
+  }
+  return { R_B_at, scoutCaches, scoutLogits, scoutTargets };
+}
+
+async function trainChunk(tokens, chunkCfg) {
+  const { model } = App;
+  const cfg = chunkCfg;
+  const len = tokens.length - 1;
+  if (len <= 0) return { loss: 0, thermoLoss: 0, diag: null };
+
+  // ── BACKWARD SCOUT: collect future context + caches for R_B (FIX 3) ───
+  const { R_B_at: R_B_future, scoutCaches, scoutLogits, scoutTargets } = scoutBackwardPass(tokens, model, cfg);
+
+  const allLogits = [];
+  const allCaches = [];
+  const allDiag = [];
+  let state = App.trainState;
+  const rbMode = cfg.rbMode || 'causal';
+  const legacy = rbMode === 'legacy';
+  // 'prevrev': re-seed R_B from the reversed PREVIOUS chunk (past only) when chunks are contiguous
+  if (rbMode === 'prevrev' && cfg.contiguous && App.prevScoutRB) {
+    state = { h: state.h, R_A: state.R_A, R_B: App.prevScoutRB.slice(), tokenHistory: state.tokenHistory };
+  }
+
+  const S_chunk_start = (recordEntropy(state.R_A) + recordEntropy(state.R_B)) * 0.5;
+
+  // ── MAIN FORWARD PASS ──────────────────────────────────────────────────
+  // legacy (v0.0001-0.0008): R_B_future[t] is built from tokens[t+1..len], which INCLUDES the
+  // target tokens[t+1] -> the answer is in the input. Kept only for A/B comparison.
+  // causal / prevrev: R_B evolves forward like R_A; no future token reaches the forward loss.
+  for (let t = 0; t < len; t++) {
+    const stIn = legacy ? {
+      h: state.h, R_A: state.R_A, R_B: R_B_future[t], tokenHistory: state.tokenHistory
+    } : state;
+    const { logits, state: newState, caches, diagnostics } =
+      model.forward(tokens[t], stIn, cfg);
+    allLogits.push(logits); allCaches.push(caches); allDiag.push(diagnostics);
+    state = legacy ? {
+      h: newState.h, R_A: newState.R_A, R_B: R_B_future[t + 1], tokenHistory: newState.tokenHistory
+    } : newState;
+  }
+  App.trainState = state;
+  App.prevScoutRB = R_B_future[0].slice();   // reversed summary of THIS chunk -> usable by the NEXT chunk only
+
+  model.zeroGrads();
+  let totalLoss = 0;
+  let grad_h = zeros(model.dim);
+
+  const S_chunk_end = (recordEntropy(state.R_A) + recordEntropy(state.R_B)) * 0.5;
+  const dS_chunk = S_chunk_end - S_chunk_start;
+  const thermoLoss = -cfg.lambda * dS_chunk;
+
+  for (let t = len - 1; t >= 0; t--) {
+    const target = tokens[t + 1];
+    const logits = allLogits[t];
+    const probs = softmax(logits);
+    totalLoss += -Math.log(probs[target] + 1e-10);
+    const grad_logits = probs.slice();
+    grad_logits[target] -= 1;
+    for (let j = 0; j < grad_logits.length; j++) grad_logits[j] /= len;
+    const { grad_h: gH } = model.backward(grad_logits, allCaches[t], cfg);
+    vecaddInPlace(grad_h, gH);
+  }
+
+  // FIX 3: Scout BPTT — R_B now trainable in both directions.
+  // Scout is a reversed LM: predicts tokens[t] given tokens[t+1..len].
+  // Gradients accumulate into the same weight arrays (multi-task learning).
+  // SCOUT_SCALE balances scout vs forward loss contribution.
+  const SCOUT_SCALE = 0.5;
+  let scoutLoss = 0;
+  for (let t = 0; t < len; t++) {
+    if (!scoutCaches[t] || !scoutLogits[t]) continue;
+    const probs = softmax(scoutLogits[t]);
+    scoutLoss += -Math.log(probs[scoutTargets[t]] + 1e-10);
+    const gl = probs.slice();
+    gl[scoutTargets[t]] -= 1;
+    for (let j = 0; j < gl.length; j++) gl[j] *= SCOUT_SCALE / len;
+    model.backward(gl, scoutCaches[t], cfg);
+  }
+  scoutLoss = scoutLoss / len * SCOUT_SCALE;
+
+  totalLoss /= len;
+
+  const avgDiag = {
+    fpItersAvg:    allDiag.reduce((s,d) => s+d.fpItersAvg, 0) / allDiag.length,
+    fpAgreeAvg:    allDiag.reduce((s,d) => s+d.fpAgreeAvg, 0) / allDiag.length,
+    aSymItersAvg:  allDiag.reduce((s,d) => s+(d.aSymItersAvg||0), 0) / allDiag.length,
+    rAEntropy:     allDiag[allDiag.length-1].rAEntropy,
+    rBEntropy:     allDiag[allDiag.length-1].rBEntropy,
+    fEntropy:      allDiag.reduce((s,d) => s+d.fEntropy, 0) / allDiag.length,
+    aAct:          allDiag.reduce((s,d) => s+d.aAct, 0) / allDiag.length,
+    bAct:          allDiag.reduce((s,d) => s+d.bAct, 0) / allDiag.length,
+    dS:            dS_chunk,
+    scoutLoss,
+  };
+
+  return { loss: totalLoss, thermoLoss, diag: avgDiag };
+}
+
+/* ── v0.0009: controls, data split, validation, leak probe ─────────────── */
+function readExperimentControls() {
+  const g = id => document.getElementById(id);
+  let seed = parseInt(g('cfg-seed').value);
+  if (!Number.isFinite(seed) || seed <= 0) {
+    seed = (Date.now() % 4294967295) || 1;      // auto seed: written back so the run is reproducible
+    g('cfg-seed').value = seed;
+  }
+  App.seed = seed >>> 0;
+  App.rbMode = g('cfg-rbmode').value;
+  App.shuffleMode = g('cfg-shuffle').value;
+  App.valFrac = Math.max(0, Math.min(0.5, parseFloat(g('cfg-valfrac').value) || 0));
+  App.valEvery = Math.max(1, parseInt(g('cfg-valevery').value) || 50);
+  App.phiClip = g('cfg-phiclip').checked;
+}
+
+function shuffleInPlace(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    const t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+}
+
+function prepareData() {
+  const all = App.corpusAll || App.corpus;
+  if (!all) return;
+  App.corpusAll = all;
+  seedRNG(App.seed);                              // split + shuffle first, then model init continues the stream
+  const n = all.length;
+  const nVal = App.valFrac > 0 ? Math.max(0, Math.min(n - 256, Math.floor(n * App.valFrac))) : 0;
+  const train = Int32Array.from(all.subarray(0, n - nVal));
+  const val = Int32Array.from(all.subarray(n - nVal));
+  if (App.shuffleMode === 'tokens') { shuffleInPlace(train); shuffleInPlace(val); }
+  App.corpus = train; App.val = val;
+  const V = Math.max(259, Tokenizer.vocabSize || 259);
+  const cnt = new Float64Array(V);
+  for (let i = 0; i < train.length; i++) cnt[train[i]]++;
+  const ref = val.length > 0 ? val : train;
+  let nll = 0;
+  if (val.length > 0) {
+    const tot = train.length + V;
+    for (let i = 0; i < val.length; i++) nll += -Math.log((cnt[val[i]] + 1) / tot);
+    App.unigramBaseline = nll / val.length;
+  } else {
+    let H = 0; for (let i = 0; i < V; i++) if (cnt[i] > 0) { const p = cnt[i] / train.length; H -= p * Math.log(p); }
+    App.unigramBaseline = H;
+  }
+}
+
+// Loss over one window. mode 'causal' = inference-consistent; 'injected' = v0.0008 training condition.
+function evalWindow(tokens, cfg, mode) {
+  const model = App.model;
+  const len = tokens.length - 1;
+  if (len <= 0) return 0;
+  let state = model.getEmptyState();
+  let RB = null;
+  if (mode === 'injected') RB = scoutBackwardPass(tokens, model, cfg).R_B_at;
+  let nll = 0;
+  for (let t = 0; t < len; t++) {
+    const stIn = mode === 'injected'
+      ? { h: state.h, R_A: state.R_A, R_B: RB[t], tokenHistory: state.tokenHistory } : state;
+    const { logits, state: ns } = model.forward(tokens[t], stIn, cfg);
+    const p = softmax(logits);
+    nll += -Math.log(p[tokens[t + 1]] + 1e-10);
+    state = mode === 'injected'
+      ? { h: ns.h, R_A: ns.R_A, R_B: RB[t + 1], tokenHistory: ns.tokenHistory } : ns;
+  }
+  return nll / len;
+}
+
+function evalWindows(arr, cfg, chunkSize, n, mode) {
+  const W = Math.min(chunkSize, arr.length - 1);
+  const span = arr.length - (W + 1);
+  let s = 0;
+  for (let i = 0; i < n; i++) {
+    const start = span <= 0 ? 0 : Math.floor(span * i / Math.max(1, n - 1));
+    s += evalWindow(arr.slice(start, start + W + 1), cfg, mode);
+  }
+  return s / n;
+}
+
+function evalValidation(cfg, chunkSize) {
+  const loss = evalWindows(App.val, cfg, chunkSize, App.nValChunks, 'causal');
+  return { loss, ppl: Math.exp(loss) };
+}
+
+function updateValUI() {
+  const v = App.lastVal;
+  const el = id => document.getElementById(id);
+  if (v) { el('d-val').textContent = v.loss.toFixed(4); el('d-valppl').textContent = v.ppl.toFixed(2); }
+  if (App.unigramBaseline !== null) el('d-unibase').textContent = App.unigramBaseline.toFixed(4);
+}
+
+async function runLeakProbe() {
+  const out = document.getElementById('leak-out');
+  if (!App.model || !App.corpus) { out.textContent = 'Need a model and a corpus first.'; return; }
+  out.textContent = 'Probing...';
+  await yieldToMain();
+  const chunkSize = parseInt(document.getElementById('cfg-chunk').value) || 64;
+  const cfg = { maxFPIter: parseInt(document.getElementById('cfg-fp').value) || 6,
+                innerFPMax: parseInt(document.getElementById('cfg-innerfp').value) || 4,
+                fpEps: parseFloat(document.getElementById('cfg-eps').value) || 1e-4 };
+  const n = 4;
+  const lines = [];
+  const sets = [['train', App.corpus]];
+  if (App.val && App.val.length > 16) sets.push(['val', App.val]);
+  for (const [name, arr] of sets) {
+    const c = evalWindows(arr, cfg, chunkSize, n, 'causal');
+    await yieldToMain();
+    const inj = evalWindows(arr, cfg, chunkSize, n, 'injected');
+    lines.push(`${name}: causal ${c.toFixed(4)} · injected ${inj.toFixed(4)} · gap ${(c - inj).toFixed(4)}`);
+    await yieldToMain();
+  }
+  lines.push('gap = causal − injected. Large positive gap: the injected future R_B carries the answer.');
+  out.textContent = lines.join('\n');
+  console.log('[LEAK PROBE]', lines.join(' | '));
+}
+
+async function trainLoop() {
+  const chunkSize = parseInt(document.getElementById('cfg-chunk').value);
+  const totalSteps = parseInt(document.getElementById('cfg-steps').value);
+  const lrStart = parseFloat(document.getElementById('cfg-lr').value);
+  const lrMin = parseFloat(document.getElementById('cfg-lr-min').value);
+  const warmup = parseInt(document.getElementById('cfg-warmup').value);
+  const lambda = parseFloat(document.getElementById('cfg-lambda').value);
+  const maxFPIter = parseInt(document.getElementById('cfg-fp').value);
+  const innerFPMax = parseInt(document.getElementById('cfg-innerfp').value);
+  const fpEps = parseFloat(document.getElementById('cfg-eps').value);
+
+  const nNeumann = 2;  // Neumann terms for FP gradient correction
+  const chunkCfg = { lambda, maxFPIter, innerFPMax, fpEps, nNeumann, rbMode: App.rbMode, contiguous: false };
+
+  document.getElementById('step-sub').textContent = `of ${totalSteps} steps — training`;
+  App.telemetry = [];  // reset telemetry on new run
+  document.getElementById('btn-csv').disabled = false;
+
+  while (App.training && App.step < totalSteps) {
+    if (App.paused) { await yieldToMain(); continue; }
+
+    const corpus = App.corpus;
+    const start = (App.step * chunkSize) % Math.max(1, corpus.length - chunkSize - 2);
+    const chunk = corpus.slice(start, start + chunkSize + 1);
+    chunkCfg.contiguous = (App._prevStart !== undefined && start === App._prevStart + chunkSize);
+    App._prevStart = start;
+    if (chunk.length < 2) { App.step++; continue; }
+
+    const lr = cosineLR(App.step + 1, lrStart, lrMin, warmup, totalSteps);
+    const { loss, thermoLoss, diag } = await trainChunk(chunk, chunkCfg);
+    optimizerStep(App.model, App.step + 1, lr);
+    App.step++;
+
+    // ── Alignment + window diagnostics (v0.0008) ─────────────────────────
+    if (App.trainState) {
+      App.rABuffer.push(App.trainState.R_A.slice());
+      if (App.rABuffer.length > 200) App.rABuffer.shift();
+      if (App.step % 10 === 0 && App.rABuffer.length >= 4) {
+        App.effectiveWindow = computeEffectiveWindow(App.rABuffer);
+      }
+    }
+    if (App.model && App.step % 10 === 0) {
+      App.lastAlignDiag = App.model.getAlignmentDiag();
+    }
+
+    const chunkToks = parseInt(document.getElementById('cfg-chunk').value);
+    App.tokenStats.corpusTotal += chunkToks;
+    if (App._stepT0) {
+      const elapsed = (performance.now() - App._stepT0) / 1000;
+      App.tokenStats.trnTps = chunkToks / elapsed;
+    }
+    App._stepT0 = performance.now();
+    updateTokenPill();
+    App.lossHistory.push(loss + Math.max(0, thermoLoss));
+    App.thermoHistory.push(thermoLoss);
+    if (App.lossHistory.length > 400) { App.lossHistory.shift(); App.thermoHistory.shift(); }
+    App.lastDiag = diag;
+
+    // v0.0009: held-out validation (causal, fixed windows, forward-only)
+    let valRec = null;
+    if (App.val && App.val.length > 16 && App.step % App.valEvery === 0) {
+      valRec = evalValidation(chunkCfg, chunkSize);
+      App.lastVal = valRec;
+      updateValUI();
+    }
+
+    // Telemetry accumulation — exported via CSV
+    if (!App.telemetry) App.telemetry = [];
+    App.telemetry.push({
+      step: App.step, loss: loss + Math.max(0,thermoLoss),
+      thermoLoss, lr,
+      fpItersAvg: diag ? diag.fpItersAvg : 0,
+      fpAgreeAvg: diag ? diag.fpAgreeAvg : 0,
+      aSymItersAvg: diag ? (diag.aSymItersAvg||0) : 0,
+      rAEntropy: diag ? diag.rAEntropy : 0,
+      rBEntropy: diag ? diag.rBEntropy : 0,
+      fEntropy: diag ? diag.fEntropy : 0,
+      aAct: diag ? diag.aAct : 0,
+      bAct: diag ? diag.bAct : 0,
+      rA_bias: App.lastAlignDiag ? App.lastAlignDiag.rA_bias : 0,
+      rB_bias: App.lastAlignDiag ? App.lastAlignDiag.rB_bias : 0,
+      divergence: App.lastAlignDiag ? App.lastAlignDiag.divergence : 0,
+      effectiveWindow: App.effectiveWindow,
+      valLoss: valRec ? valRec.loss : undefined,
+      valPpl: valRec ? valRec.ppl : undefined,
+      unigramBaseline: App.unigramBaseline !== null ? App.unigramBaseline : undefined,
+      seed: String(App.seed), rbMode: App.rbMode, shuffle: App.shuffleMode,
+      phiClip: App.phiClip ? '1' : '0',
+      rA_bias0: App.alignDiag0 ? App.alignDiag0.rA_bias : undefined,
+      rB_bias0: App.alignDiag0 ? App.alignDiag0.rB_bias : undefined,
+    });
+
+    updateTrainUI(loss, thermoLoss, diag, totalSteps);
+
+    const sampleFreq = parseInt(document.getElementById('cfg-sample-freq').value) || 250;
+    if (App.step % sampleFreq === 0) await window._generateSamplePatch();
+    const ckptEvery = parseInt(document.getElementById('cfg-ckpt').value) || 1000;
+    if (App.step % ckptEvery === 0) {
+      addDebugRow(App.step, loss, thermoLoss, diag);
+      autoSave();  // auto-checkpoint
+    } else if (App.step % 50 === 0) addDebugRow(App.step, loss, thermoLoss, diag);
+
+    await yieldToMain();
+  }
+
+  if (App.step >= totalSteps) {
+    setStatus('DONE', 'idle');
+    document.getElementById('btn-train').textContent = 'TRAIN AGAIN';
+    document.getElementById('btn-train').disabled = false;
+    document.getElementById('btn-pause').disabled = true;
+    App.training = false;
+    // Auto-save final model and telemetry
+    try { exportModel(); } catch(e) {}
+    try { exportTelemetry(); } catch(e) {}
+  }
+}
+
+/* ╔══════════════════════════════════════════════════════╗
+   ║             GENERATION                                ║
+   ╚══════════════════════════════════════════════════════╝ */
+
+function sampleLogits(logits, temperature) {
+  if (temperature <= 0.01) {
+    let max = -Infinity, best = 0;
+    for (let i = 0; i < logits.length; i++) if (logits[i] > max) { max = logits[i]; best = i; }
+    return best;
+  }
+  const scaled = new Float32Array(logits.length);
+  let max = -Infinity;
+  for (let i = 0; i < logits.length; i++) { scaled[i] = logits[i] / temperature; if (scaled[i] > max) max = scaled[i]; }
+  const probs = new Float32Array(logits.length);
+  let sum = 0;
+  for (let i = 0; i < logits.length; i++) { probs[i] = Math.exp(scaled[i] - max); sum += probs[i]; }
+  for (let i = 0; i < probs.length; i++) probs[i] /= sum;
+  const r = rand();
+  let acc = 0;
+  for (let i = 0; i < probs.length; i++) { if (probs[i] > 0) { acc += probs[i]; if (r <= acc) return i; } }
+  return 0;
+}
+
+async function generateSample(maxLen=80, temperature=0.8, prompt='') {
+  const { model } = App;
+  if (!model || !Tokenizer.trained) return '';
+  let state = model.getEmptyState();
+  const promptTokens = prompt ? Tokenizer.encode(prompt) : [257];
+  for (const t of promptTokens) {
+    const { state: ns } = model.forward(t, state, { maxFPIter: 6, innerFPMax: 4, fpEps: 1e-4 });
+    state = ns;
+  }
+  let out = prompt;
+  let lastTokenId = promptTokens[promptTokens.length - 1];
+  for (let i = 0; i < maxLen; i++) {
+    const { logits, state: ns } = model.forward(lastTokenId, state, { maxFPIter: 6, innerFPMax: 4, fpEps: 1e-4 });
+    state = ns;
+    const tokenId = sampleLogits(logits, temperature);
+    if (tokenId === 258) break;
+    out += Tokenizer.decode([tokenId]);
+    lastTokenId = tokenId;
+  }
+  return out;
+}
+
+async function startGeneration() {
+  if (!App.model) return;
+  const prompt = document.getElementById('gen-prompt').value;
+  const temp = parseFloat(document.getElementById('cfg-temp').value);
+  const maxTok = parseInt(document.getElementById('cfg-gentokens').value);
+  const innerFPMax = parseInt(document.getElementById('cfg-innerfp').value);
+
+  document.getElementById('gen-output').textContent = '...';
+  document.getElementById('btn-gen').disabled = true;
+  switchView('gen');
+
+  const { model } = App;
+  let state = model.getEmptyState();
+  const promptTokens = prompt ? Tokenizer.encode(prompt) : [257];
+  for (const t of promptTokens) {
+    const { state: ns } = model.forward(t, state, { maxFPIter: 6, innerFPMax, fpEps: 1e-4 });
+    state = ns;
+  }
+
+  let output = prompt;
+  const el = document.getElementById('gen-output');
+  el.textContent = output;
+  let lastTokenId = promptTokens[promptTokens.length - 1];
+  App.tokenStats.sessionIn += promptTokens.length;
+  App.tokenStats.sessionContext += promptTokens.length;
+  const maxEntropy = Math.log(model.vocab);
+
+  for (let i = 0; i < maxTok; i++) {
+    const { logits, state: ns, diagnostics } = model.forward(lastTokenId, state, { maxFPIter: 6, innerFPMax, fpEps: 1e-4 });
+    state = ns;
+    const tokenId = sampleLogits(logits, temp);
+    if (tokenId === 258) break;
+    output += Tokenizer.decode([tokenId]);
+    el.textContent = output;
+    lastTokenId = tokenId;
+    App.tokenStats.sessionOut++;
+    App.tokenStats.sessionContext++;
+    updateTokenPill();
+    const pct = Math.min(100, (((diagnostics.rAEntropy + diagnostics.rBEntropy) * 0.5) / maxEntropy) * 100);
+    document.getElementById('gen-entropy-fill').style.width = pct + '%';
+    document.getElementById('gen-entropy-label').textContent =
+      `R_A: ${diagnostics.rAEntropy.toFixed(3)} · R_B: ${diagnostics.rBEntropy.toFixed(3)} (max ≈ ${maxEntropy.toFixed(1)})`;
+    if (i % 10 === 0) await yieldToMain();
+  }
+
+  document.getElementById('btn-gen').disabled = false;
+  document.getElementById('btn-clear-gen').onclick = () => switchView('train');
+}
+
+function clearGen() { switchView('train'); }
+
+/* ╔══════════════════════════════════════════════════════╗
+   ║          FILE I/O — .learns format                    ║
+   ╚══════════════════════════════════════════════════════╝ */
+
+function autoSave() { try { exportModel(true); } catch(e) {} }
+
+function exportModel(silent=false) {
+  if (!App.model) return;
+  const m = App.model;
+  const data = {
+    version: '0.0009',
+    step: App.step,
+    config: { vocab: m.vocab, dim: m.dim, layers: m.numLayers, K_hist: m.K_hist },
+    meta: { seed: App.seed, rbMode: App.rbMode, shuffle: App.shuffleMode, valFrac: App.valFrac, valEvery: App.valEvery, phiClip: App.phiClip },
+    tokenizer: Tokenizer.serialize(),
+    weights: {
+      W_embed: Array.from(m.W_embed),
+      W_rel: Array.from(m.W_rel),
+      W_rec_A: Array.from(m.W_rec_A), W_rec_B: Array.from(m.W_rec_B),
+      W_cross_A: Array.from(m.W_cross_A), W_cross_B: Array.from(m.W_cross_B),
+      ln_recA_gamma: Array.from(m.ln_recA_gamma), ln_recA_beta: Array.from(m.ln_recA_beta),
+      ln_recB_gamma: Array.from(m.ln_recB_gamma), ln_recB_beta: Array.from(m.ln_recB_beta),
+      W_frontier: Array.from(m.W_frontier),
+      layers: []
+    }
+  };
+  for (let l = 0; l < m.numLayers; l++) {
+    data.weights.layers.push({
+      W_A: Array.from(m.layers_W_A[l]),
+      W_B: Array.from(m.layers_W_B[l]),
+      W_gA: Array.from(m.layers_W_gA[l]),
+      W_gB: Array.from(m.layers_W_gB[l]),
+      W_FA: Array.from(m.layers_W_FA[l]), W_FB: Array.from(m.layers_W_FB[l]),
+      ln_fpA_gamma: Array.from(m.layers_ln_fpA_gamma[l]), ln_fpA_beta: Array.from(m.layers_ln_fpA_beta[l]),
+      ln_fpB_gamma: Array.from(m.layers_ln_fpB_gamma[l]), ln_fpB_beta: Array.from(m.layers_ln_fpB_beta[l]),
+      ln_fpAsym_gamma: Array.from(m.layers_ln_fpAsym_gamma[l]),
+      ln_fpAsym_beta: Array.from(m.layers_ln_fpAsym_beta[l]),
+      thetas: Array.from(m.layers_thetas[l]),
+      W_prog: Array.from(m.layers_W_prog[l]),
+      W_px: Array.from(m.layers_W_px[l]),
+    });
+  }
+  // Optional: save optimizer state (Adam m1/m2 moments + trainState)
+  const skipOptim = document.getElementById('chk-save-optim') && document.getElementById('chk-save-optim').checked;
+  if (!skipOptim) {
+    const om = {};
+    om.W_embed_m1 = Array.from(m.W_embed_m1); om.W_embed_m2 = Array.from(m.W_embed_m2);
+    om.W_rel_m1 = Array.from(m.W_rel_m1); om.W_rel_m2 = Array.from(m.W_rel_m2);
+    om.W_rec_A_m1 = Array.from(m.W_rec_A_m1); om.W_rec_A_m2 = Array.from(m.W_rec_A_m2);
+    om.W_rec_B_m1 = Array.from(m.W_rec_B_m1); om.W_rec_B_m2 = Array.from(m.W_rec_B_m2);
+    om.W_cross_A_m1 = Array.from(m.W_cross_A_m1); om.W_cross_A_m2 = Array.from(m.W_cross_A_m2);
+    om.W_cross_B_m1 = Array.from(m.W_cross_B_m1); om.W_cross_B_m2 = Array.from(m.W_cross_B_m2);
+    om.W_frontier_m1 = Array.from(m.W_frontier_m1); om.W_frontier_m2 = Array.from(m.W_frontier_m2);
+    om.layers = [];
+    for (let l = 0; l < m.numLayers; l++) {
+      om.layers.push({
+        W_A_m1: Array.from(m.layers_W_A_m1[l]), W_A_m2: Array.from(m.layers_W_A_m2[l]),
+        W_B_m1: Array.from(m.layers_W_B_m1[l]), W_B_m2: Array.from(m.layers_W_B_m2[l]),
+        W_gA_m1: Array.from(m.layers_W_gA_m1[l]), W_gA_m2: Array.from(m.layers_W_gA_m2[l]),
+        W_gB_m1: Array.from(m.layers_W_gB_m1[l]), W_gB_m2: Array.from(m.layers_W_gB_m2[l]),
+        W_FA_m1: Array.from(m.layers_W_FA_m1[l]), W_FA_m2: Array.from(m.layers_W_FA_m2[l]),
+        W_FB_m1: Array.from(m.layers_W_FB_m1[l]), W_FB_m2: Array.from(m.layers_W_FB_m2[l]),
+        W_prog_m1: Array.from(m.layers_W_prog_m1[l]), W_prog_m2: Array.from(m.layers_W_prog_m2[l]),
+        W_px_m1: Array.from(m.layers_W_px_m1[l]), W_px_m2: Array.from(m.layers_W_px_m2[l]),
+        thetas_m1: Array.from(m.layers_thetas_m1[l]), thetas_m2: Array.from(m.layers_thetas_m2[l]),
+      });
+    }
+    data.optimState = om;
+    // Also save train state so continued run starts with correct records
+    data.trainState = {
+      h: Array.from(App.trainState.h),
+      R_A: Array.from(App.trainState.R_A),
+      R_B: Array.from(App.trainState.R_B),
+    };
+  }
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const exportName = document.getElementById('cfg-export-name').value.trim();
+  const baseName = exportName || 'learns-v0.0009';
+  a.download = `${baseName}-step${App.step}.learns`;
+  if (!silent) a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function importModel(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (data.version !== '0.0005' && data.version !== '0.0006' && data.version !== '0.0007') { alert('Incompatible .learns version (need v0.0005 or v0.0006)'); return; }
+      Tokenizer.deserialize(data.tokenizer);
+      const cfg = data.config;
+      App.model = new LEARNSModel(cfg);
+      const m = App.model;
+      const w = data.weights;
+      m.W_embed.set(w.W_embed);
+      m.W_rel.set(w.W_rel);
+      m.W_rec_A.set(w.W_rec_A); m.W_rec_B.set(w.W_rec_B);
+      m.W_cross_A.set(w.W_cross_A); m.W_cross_B.set(w.W_cross_B);
+      m.ln_recA_gamma.set(w.ln_recA_gamma); m.ln_recA_beta.set(w.ln_recA_beta);
+      m.ln_recB_gamma.set(w.ln_recB_gamma); m.ln_recB_beta.set(w.ln_recB_beta);
+      m.W_frontier.set(w.W_frontier);
+      for (let l = 0; l < cfg.layers; l++) {
+        const lw = w.layers[l];
+        m.layers_W_A[l].set(lw.W_A);
+        m.layers_W_B[l].set(lw.W_B);
+        m.layers_W_gA[l].set(lw.W_gA);
+        m.layers_W_gB[l].set(lw.W_gB);
+        m.layers_W_FA[l].set(lw.W_FA); m.layers_W_FB[l].set(lw.W_FB);
+        m.layers_ln_fpA_gamma[l].set(lw.ln_fpA_gamma); m.layers_ln_fpA_beta[l].set(lw.ln_fpA_beta);
+        m.layers_ln_fpB_gamma[l].set(lw.ln_fpB_gamma); m.layers_ln_fpB_beta[l].set(lw.ln_fpB_beta);
+        m.layers_ln_fpAsym_gamma[l].set(lw.ln_fpAsym_gamma);
+        m.layers_ln_fpAsym_beta[l].set(lw.ln_fpAsym_beta);
+        m.layers_thetas[l].set(lw.thetas);
+        m.layers_W_prog[l].set(lw.W_prog);
+        m.layers_W_px[l].set(lw.W_px);
+      }
+      App.step = data.step;
+      if (data.meta) {                     // v0.0009: restore run controls so the data split reproduces
+        const g = id => document.getElementById(id);
+        if (data.meta.seed) g('cfg-seed').value = data.meta.seed;
+        if (data.meta.rbMode) g('cfg-rbmode').value = data.meta.rbMode;
+        if (data.meta.shuffle) g('cfg-shuffle').value = data.meta.shuffle;
+        if (data.meta.valFrac !== undefined) g('cfg-valfrac').value = data.meta.valFrac;
+        if (data.meta.valEvery) g('cfg-valevery').value = data.meta.valEvery;
+        if (data.meta.phiClip !== undefined) g('cfg-phiclip').checked = !!data.meta.phiClip;
+      }
+      // Restore train state if saved (preserves records from prior run)
+      if (data.trainState) {
+        App.trainState = {
+          h: new Float32Array(data.trainState.h),
+          R_A: new Float32Array(data.trainState.R_A),
+          R_B: new Float32Array(data.trainState.R_B),
+          tokenHistory: [],
+        };
+      } else {
+        App.trainState = m.getEmptyState();
+      }
+      // Restore optimizer state if present
+      if (data.optimState) {
+        const om = data.optimState;
+        m.W_embed_m1.set(om.W_embed_m1); m.W_embed_m2.set(om.W_embed_m2);
+        m.W_rel_m1.set(om.W_rel_m1); m.W_rel_m2.set(om.W_rel_m2);
+        m.W_rec_A_m1.set(om.W_rec_A_m1); m.W_rec_A_m2.set(om.W_rec_A_m2);
+        m.W_rec_B_m1.set(om.W_rec_B_m1); m.W_rec_B_m2.set(om.W_rec_B_m2);
+        m.W_cross_A_m1.set(om.W_cross_A_m1); m.W_cross_A_m2.set(om.W_cross_A_m2);
+        m.W_cross_B_m1.set(om.W_cross_B_m1); m.W_cross_B_m2.set(om.W_cross_B_m2);
+        m.W_frontier_m1.set(om.W_frontier_m1); m.W_frontier_m2.set(om.W_frontier_m2);
+        for (let l = 0; l < cfg.layers; l++) {
+          const ol = om.layers[l];
+          if (!ol) continue;
+          m.layers_W_A_m1[l].set(ol.W_A_m1); m.layers_W_A_m2[l].set(ol.W_A_m2);
+          m.layers_W_B_m1[l].set(ol.W_B_m1); m.layers_W_B_m2[l].set(ol.W_B_m2);
+          m.layers_W_gA_m1[l].set(ol.W_gA_m1); m.layers_W_gA_m2[l].set(ol.W_gA_m2);
+          m.layers_W_gB_m1[l].set(ol.W_gB_m1); m.layers_W_gB_m2[l].set(ol.W_gB_m2);
+          m.layers_W_FA_m1[l].set(ol.W_FA_m1); m.layers_W_FA_m2[l].set(ol.W_FA_m2);
+          m.layers_W_FB_m1[l].set(ol.W_FB_m1); m.layers_W_FB_m2[l].set(ol.W_FB_m2);
+          m.layers_W_prog_m1[l].set(ol.W_prog_m1); m.layers_W_prog_m2[l].set(ol.W_prog_m2);
+          m.layers_W_px_m1[l].set(ol.W_px_m1); m.layers_W_px_m2[l].set(ol.W_px_m2);
+          m.layers_thetas_m1[l].set(ol.thetas_m1); m.layers_thetas_m2[l].set(ol.thetas_m2);
+        }
+      }
+      App.modelLoaded = true;
+      App.chatState = m.getEmptyState();
+      setStatus('LOADED', 'idle');
+      document.getElementById('btn-gen').disabled = false;
+      document.getElementById('btn-export').disabled = false;
+      document.getElementById('btn-train').disabled = false;
+      document.getElementById('btn-train').textContent = 'CONTINUE TRAINING';
+      document.getElementById('btn-chat-send').disabled = false;
+      document.getElementById('step-display').textContent = App.step;
+      document.getElementById('step-sub').textContent = `step ${App.step} — model loaded — click CONTINUE TRAINING to resume`;
+    } catch(err) {
+      alert('Failed to load .learns file: ' + err.message);
+
+function exportTelemetry() {
+  if (!App.telemetry || App.telemetry.length === 0) {
+    alert('No telemetry data yet — run training first.'); return;
+  }
+  const headers = ['step','loss','thermoLoss','lr','fpItersAvg','fpAgreeAvg',
+                   'aSymItersAvg','rAEntropy','rBEntropy','fEntropy','aAct','bAct',
+                   'rA_bias','rB_bias','divergence','effectiveWindow',
+                   'valLoss','valPpl','unigramBaseline','seed','rbMode','shuffle','phiClip','rA_bias0','rB_bias0'];
+  const rows = App.telemetry.map(r =>
+    headers.map(h => r[h] !== undefined ? r[h].toFixed ? r[h].toFixed(6) : r[h] : '').join(',')
+  );
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const exportName = document.getElementById('cfg-export-name').value.trim();
+  const baseName = exportName || 'learns-telemetry';
+  a.download = `${baseName}-step${App.step}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ╔══════════════════════════════════════════════════════╗
+   ║                UI LOGIC                               ║
+   ╚══════════════════════════════════════════════════════╝ */
+
+let corpusText = '';
+
+function onFileLoad(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    corpusText = e.target.result;
+    const dn = document.getElementById('drop-name');
+    dn.textContent = file.name + ` (${(file.size/1024).toFixed(1)} KB)`;
+    dn.style.display = 'block';
+    document.getElementById('btn-compile').disabled = false;
+    setBpeStatus('File loaded. Click COMPILE BPE.');
+  };
+  reader.readAsText(file);
+}
+
+const dz = document.getElementById('dropzone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('over');
+  const file = e.dataTransfer.files[0];
+  if (file && file.name.endsWith('.txt')) {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      corpusText = ev.target.result;
+      const dn = document.getElementById('drop-name');
+      dn.textContent = file.name + ` (${(file.size/1024).toFixed(1)} KB)`;
+      dn.style.display = 'block';
+      document.getElementById('btn-compile').disabled = false;
+      setBpeStatus('File loaded. Click COMPILE BPE.');
+    };
+    reader.readAsText(file);
+  }
+});
+
+function setBpeStatus(msg) { document.getElementById('bpe-status').textContent = msg; }
+
+async function compileBPE() {
+  document.getElementById('btn-compile').disabled = true;
+  document.getElementById('bpe-prog-wrap').style.display = 'block';
+  setStatus('COMPILING BPE...', 'active');
+  setBpeStatus('Compiling...');
+  const targetVocab = Math.max(259, parseInt(document.getElementById('cfg-vocab').value));
+  await Tokenizer.compile(corpusText, targetVocab, (pct) => {
+    document.getElementById('bpe-prog').style.width = (pct * 100) + '%';
+    setBpeStatus(`${(pct*100).toFixed(0)}% — ${Tokenizer.vocabSize || 259} tokens`);
+  });
+  App.corpus = new Int32Array(Tokenizer.encode(corpusText));
+  App.corpusAll = App.corpus;
+  const actualVocab = Tokenizer.vocabSize;
+  setBpeStatus(`Done — vocab ${actualVocab} · corpus ${App.corpus.length} tokens`);
+  setStatus('BPE READY', 'idle');
+  document.getElementById('btn-train').disabled = false;
+  document.getElementById('btn-compile').disabled = false;
+}
+
+function startTraining() {
+  if (App.training) return;
+  readExperimentControls();
+  prepareData();                     // seeds RNG, splits train/val, applies shuffle control
+  App.prevScoutRB = null; App._prevStart = undefined; App.lastVal = null;
+  updateValUI();
+  if (!App.modelLoaded) {
+    // Fresh run — build model from scratch
+    const vocabSize = Math.max(259, Tokenizer.vocabSize);
+    const dim = parseInt(document.getElementById('cfg-dim').value);
+    const layers = parseInt(document.getElementById('cfg-layers').value);
+    App.model = new LEARNSModel({ vocab: vocabSize, dim, layers });
+    App.trainState = App.model.getEmptyState();
+    App.alignDiag0 = App.model.getAlignmentDiag();   // step-0 reference for bias diagnostics
+    App.step = 0;
+    App.lossHistory = [];
+    App.thermoHistory = [];
+    document.getElementById('tc-params').textContent =
+      (App.model.getParamCount()/1000).toFixed(1)+'k';
+  } else {
+    // Continuing from loaded model — keep weights, reset training loop state
+    App.lossHistory = [];
+    App.thermoHistory = [];
+    // trainState already restored from import; keep it
+  }
+  App.training = true;
+  App.paused = false;
+  document.getElementById('btn-train').disabled = true;
+  document.getElementById('btn-pause').disabled = false;
+  document.getElementById('btn-export').disabled = false;
+  document.getElementById('debug-body').innerHTML = '';
+  setStatus('TRAINING', 'active');
+  App.modelLoaded = false;  // reset flag so next START TRAINING (after this run) is fresh
+  trainLoop();
+}
+
+function pauseTraining() {
+  if (!App.training) return;
+  App.paused = !App.paused;
+  document.getElementById('btn-pause').textContent = App.paused ? 'RESUME' : 'PAUSE';
+  setStatus(App.paused ? 'PAUSED' : 'TRAINING', App.paused ? 'warn' : 'active');
+}
+
+function setStatus(text, state) {
+  document.getElementById('status-text').textContent = text;
+  const dot = document.getElementById('status-dot');
+  dot.className = 'status-dot ' + state;
+}
+
+function updateLossChart(loss, fEntropy) {
+  const canvas = document.getElementById('loss-canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = canvas.offsetWidth;
+  canvas.height = canvas.offsetHeight;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const hist = App.lossHistory;
+  if (hist.length < 2) return;
+  const max = Math.max(...hist) * 1.05;
+  const min = Math.min(...hist) * 0.95;
+  const range = max - min || 1;
+  const xStep = W / (hist.length - 1);
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < hist.length; i++) {
+    const x = i * xStep;
+    const y = H - ((hist[i] - min) / range) * H;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  const thHist = App.thermoHistory;
+  if (thHist.length > 1) {
+    const tMax = Math.max(...thHist.map(Math.abs)) * 1.1 || 1;
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-dim').trim();
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < thHist.length; i++) {
+      const x = i * xStep;
+      const y = H/2 - (thHist[i] / tMax) * (H/2);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+}
+
+function updateTrainUI(loss, thermoLoss, diag, totalSteps) {
+  if (!diag) return;
+  document.getElementById('step-display').textContent = App.step;
+  document.getElementById('step-sub').textContent = `of ${totalSteps} steps — training`;
+  document.getElementById('d-loss').textContent = (loss + Math.max(0, thermoLoss)).toFixed(4);
+  document.getElementById('d-fp').textContent = diag.fpItersAvg.toFixed(1);
+  document.getElementById('d-raent').textContent = diag.rAEntropy.toFixed(3);
+  document.getElementById('d-rbent').textContent = diag.rBEntropy.toFixed(3);
+  document.getElementById('d-fent').textContent = diag.fEntropy.toFixed(3);
+  document.getElementById('d-aact').textContent = diag.aAct.toFixed(3);
+  document.getElementById('d-bact').textContent = diag.bAct.toFixed(3);
+  document.getElementById('d-fpagree').textContent =
+    diag.fpAgreeAvg !== undefined ? diag.fpAgreeAvg.toFixed(3) : '—';
+  document.getElementById('d-asymiters').textContent =
+    diag.aSymItersAvg !== undefined ? diag.aSymItersAvg.toFixed(1) : '—';
+  // Alignment diagnostic (v0.0008)
+  if (App.lastAlignDiag) {
+    const ad = App.lastAlignDiag;
+    const fmt3 = v => (v >= 0 ? '+' : '') + v.toFixed(3);
+    document.getElementById('d-rabias').textContent = fmt3(ad.rA_bias);
+    document.getElementById('d-rbbias').textContent = fmt3(ad.rB_bias);
+    document.getElementById('d-diverg').textContent = fmt3(ad.divergence);
+    // Colour the divergence — growing is good, collapsed is warn
+    const divEl = document.getElementById('d-diverg');
+    divEl.style.color = ad.divergence > 0.05 ? 'var(--success)' :
+                        ad.divergence < -0.02 ? 'var(--error)' : 'var(--text-dim)';
+  }
+  document.getElementById('d-effctx').textContent =
+    App.effectiveWindow > 0 ? String(App.effectiveWindow) : '—';
+  const tern = App.model ? App.model.getTernaryStats() : null;
+  if (tern) {
+    ['neg','zero','pos'].forEach((k, i) => {
+      const ids = ['tbar-neg','tbar-zero','tbar-pos'];
+      const pctIds = ['tpct-neg','tpct-zero','tpct-pos'];
+      const keys = ['neg','zero','pos'];
+      document.getElementById(ids[i]).style.width = (tern[keys[i]] * 100).toFixed(1) + '%';
+      document.getElementById(ids[i]).textContent = (tern[keys[i]] * 100).toFixed(1) + '%';
+      document.getElementById(pctIds[i]).textContent = (tern[keys[i]] * 100).toFixed(1) + '%';
+    });
+  }
+  updateLossChart(loss + Math.max(0, thermoLoss), diag.fEntropy);
+}
+
+function addDebugRow(step, loss, thermo, diag) {
+  if (!diag) return;
+  const tbody = document.getElementById('debug-body');
+  while (tbody.rows.length > 200) tbody.deleteRow(0);
+  const row = tbody.insertRow(-1);
+  const maxFP = parseInt(document.getElementById('cfg-fp').value);
+  const innerFPMax = parseInt(document.getElementById('cfg-innerfp').value);
+
+  let flag = '', cls = '';
+  if (diag.fpItersAvg >= maxFP - 0.1) { flag = 'FP_MAX'; cls = 'warn'; }
+  if (diag.rAEntropy < 0.5 && step > 200) { flag += ' RA_LOW'; cls = 'warn'; }
+  if (diag.rBEntropy < 0.5 && step > 200) { flag += ' RB_LOW'; cls = 'warn'; }
+  if (diag.aSymItersAvg !== undefined && diag.aSymItersAvg >= innerFPMax - 0.1) { flag += ' A_SYM_MAX'; cls = 'warn'; }
+  if (diag.dS < -0.5) { flag += ' ARROW↓'; cls = 'error'; }
+  if (Math.abs(diag.aAct) < 0.001) { flag += ' A_DEAD'; cls = 'error'; }
+  if (Math.abs(diag.bAct) < 0.001) { flag += ' B_DEAD'; cls = 'error'; }
+  // Alignment flags (v0.0008)
+  if (App.lastAlignDiag) {
+    const ad = App.lastAlignDiag;
+    if (step > 500 && ad.divergence < 0.01) { flag += ' COLLAPSED'; cls = cls || 'warn'; }
+  }
+
+  row.insertCell(0).textContent = step;
+  row.insertCell(1).textContent = (loss + Math.max(0,thermo)).toFixed(4);
+  row.insertCell(2).textContent = thermo.toFixed(4);
+  row.insertCell(3).textContent = diag.fpItersAvg.toFixed(1);
+  row.insertCell(4).textContent = diag.rAEntropy.toFixed(3);
+  row.insertCell(5).textContent = diag.rBEntropy.toFixed(3);
+  row.insertCell(6).textContent = diag.fEntropy.toFixed(3);
+  row.insertCell(7).textContent = diag.aAct.toFixed(3);
+  row.insertCell(8).textContent = diag.bAct.toFixed(3);
+  row.insertCell(9).textContent = diag.fpAgreeAvg !== undefined ? diag.fpAgreeAvg.toFixed(3) : '—';
+  row.insertCell(10).textContent = diag.aSymItersAvg !== undefined ? diag.aSymItersAvg.toFixed(1) : '—';
+  row.insertCell(11).textContent = flag.trim() || '—';
+  // Alignment + window columns (v0.0008)
+  const ad = App.lastAlignDiag;
+  const fmtBias = v => (v >= 0 ? '+' : '') + v.toFixed(3);
+  const raCell = row.insertCell(12); raCell.textContent = ad ? fmtBias(ad.rA_bias) : '—';
+  const rbCell = row.insertCell(13); rbCell.textContent = ad ? fmtBias(ad.rB_bias) : '—';
+  const dvCell = row.insertCell(14);
+  if (ad) {
+    dvCell.textContent = fmtBias(ad.divergence);
+    dvCell.style.color = ad.divergence > 0.05 ? 'var(--success)' :
+                         ad.divergence < -0.02 ? 'var(--error)' : '';
+  } else { dvCell.textContent = '—'; }
+  row.insertCell(15).textContent = App.effectiveWindow > 0 ? String(App.effectiveWindow) : '—';
+
+  const wrap = document.getElementById('debug-table-wrap');
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+// ── VIEW SWITCHING ────────────────────────────────────────────────────────────
+function switchView(v) {
+  document.getElementById('train-view').style.display = v === 'train' ? 'flex' : 'none';
+  document.getElementById('gen-view').style.display = v === 'gen' ? 'flex' : 'none';
+  document.getElementById('chat-view').style.display = v === 'chat' ? 'flex' : 'none';
+  document.getElementById('chat-lp-section').style.display = v === 'chat' ? 'block' : 'none';
+  ['train','gen','chat'].forEach(id => {
+    document.getElementById('tab-'+id).classList.toggle('active', id === v);
+  });
+  if (v === 'chat' && App.model) document.getElementById('btn-chat-send').disabled = false;
+}
+
+// ── CHAT INTERFACE ────────────────────────────────────────────────────────────
+function newConversation() {
+  if (!App.model) return;
+  App.chatState = App.model.getEmptyState();
+  App.chatHistory = [];
+  App.chatSeeded = false;
+  App.tokenStats.sessionIn = 0;
+  App.tokenStats.sessionOut = 0;
+  App.tokenStats.sessionContext = 0;
+  document.getElementById('chat-history').innerHTML =
+    '<div style="color:var(--text-dim);font-size:11px;font-style:italic;padding:8px 0;">New conversation started.</div>';
+  document.getElementById('chat-entropy-fill').style.width = '0%';
+  updateTokenPill();
+}
+
+function chatInputKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatSend(); }
+}
+
+function autoResizeChatInput(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+function appendChatMsg(role, text, meta) {
+  const hist = document.getElementById('chat-history');
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + role;
+  const roleEl = document.createElement('div');
+  roleEl.className = 'cm-role';
+  roleEl.textContent = role === 'user' ? 'YOU' : 'LEARNS';
+  const textEl = document.createElement('div');
+  textEl.className = 'cm-text';
+  textEl.textContent = text;
+  div.appendChild(roleEl);
+  div.appendChild(textEl);
+  if (meta) {
+    const metaEl = document.createElement('div');
+    metaEl.className = 'cm-meta';
+    metaEl.textContent = meta;
+    div.appendChild(metaEl);
+  }
+  hist.appendChild(div);
+  hist.scrollTop = hist.scrollHeight;
+  return textEl;
+}
+
+async function chatSend() {
+  if (!App.model || !Tokenizer.trained) return;
+  const inputEl = document.getElementById('chat-input');
+  const userText = inputEl.value.trim();
+  if (!userText) return;
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  document.getElementById('btn-chat-send').disabled = true;
+
+  // Init chat state if needed
+  if (!App.chatState) App.chatState = App.model.getEmptyState();
+
+  const fpCfg = { maxFPIter: 6, innerFPMax: 4, fpEps: 1e-4 };
+  const maxEntropy = Math.log(App.model.vocab);
+
+  // Process seed prompt once
+  if (!App.chatSeeded) {
+    const seed = document.getElementById('chat-seed').value.trim();
+    if (seed) {
+      const seedToks = Tokenizer.encode(seed);
+      for (const t of seedToks) {
+        const { state: ns } = App.model.forward(t, App.chatState, fpCfg);
+        App.chatState = ns;
+      }
+      App.tokenStats.sessionContext += seedToks.length;
+    }
+    App.chatSeeded = true;
+  }
+
+  // Encode and feed user message
+  const userTokens = Tokenizer.encode(userText);
+  const tokIn = userTokens.length;
+  App.tokenStats.sessionIn += tokIn;
+  App.tokenStats.sessionContext += tokIn;
+  appendChatMsg('user', userText, `${tokIn} tokens`);
+
+  for (const t of userTokens) {
+    const { state: ns } = App.model.forward(t, App.chatState, fpCfg);
+    App.chatState = ns;
+  }
+
+  // Generate response
+  const maxTok = parseInt(document.getElementById('cfg-chat-max').value);
+  const temp = parseFloat(document.getElementById('cfg-chat-temp').value);
+  const responseEl = appendChatMsg('learns', '▋', '');
+
+  let out = '';
+  let lastTokId = userTokens[userTokens.length - 1] ?? 257;
+  let tokOut = 0;
+  let lastDiag = null;
+  const chatT0 = performance.now();
+
+  for (let i = 0; i < maxTok; i++) {
+    const { logits, state: ns, diagnostics } = App.model.forward(lastTokId, App.chatState, fpCfg);
+    App.chatState = ns;
+    lastDiag = diagnostics;
+    const tokId = sampleLogits(logits, temp);
+    if (tokId === 258) break;  // EOS
+    const piece = Tokenizer.decode([tokId]);
+    out += piece;
+    tokOut++;
+    responseEl.textContent = out + '▋';
+    lastTokId = tokId;
+    if (i % 8 === 0) {
+      const pct = Math.min(100, (((diagnostics.rAEntropy + diagnostics.rBEntropy) * 0.5) / maxEntropy) * 100);
+      document.getElementById('chat-entropy-fill').style.width = pct + '%';
+      await yieldToMain();
+    }
+  }
+  responseEl.textContent = out;
+
+  App.tokenStats.sessionOut += tokOut;
+  App.tokenStats.sessionContext += tokOut;
+  const chatElapsed = (performance.now() - chatT0) / 1000;
+  if (tokOut > 0 && chatElapsed > 0) App.tokenStats.infTps = tokOut / chatElapsed;
+  updateTokenPill();
+
+  // Update meta line on response bubble
+  const metaEl = responseEl.nextElementSibling;
+  if (metaEl && metaEl.className === 'cm-meta' && lastDiag) {
+    metaEl.textContent = `${tokOut} tokens · R_A: ${lastDiag.rAEntropy.toFixed(3)} · R_B: ${lastDiag.rBEntropy.toFixed(3)}`;
+  }
+
+  document.getElementById('btn-chat-send').disabled = false;
+  document.getElementById('chat-history').scrollTop = document.getElementById('chat-history').scrollHeight;
+}
+
+let debugOpen = false;
+function toggleDebug() {
+  debugOpen = !debugOpen;
+  document.getElementById('debug-panel').classList.toggle('open', debugOpen);
+  document.getElementById('btn-debug-toggle').textContent = debugOpen ? 'DEBUG ▴' : 'DEBUG ▾';
+}
+</script>
+<script>
+// Live sample patch
+const _gsPatch = generateSample;
+window._generateSamplePatch = async function() {
+  const s = await _gsPatch(80, 0.8, '');
+  if (s) document.getElementById('live-sample').textContent = s;
+  document.getElementById('btn-gen').disabled = App.step > 0;
+  return s;
+};
+</script>
+</body>
+</html>
