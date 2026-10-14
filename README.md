@@ -5,7 +5,7 @@
 ![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square)
 ![Weights](https://img.shields.io/badge/weights-ternary%20b1.58-8b5cf6?style=flat-square)
 ![Hardware](https://img.shields.io/badge/hardware-any%20CPU-a78bfa?style=flat-square)
-![Version](https://img.shields.io/badge/version-0.0010-6d28d9?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.0011-6d28d9?style=flat-square)
 
 **Logical Entropic Arrow Recursive Neuro-Symbolic Architecture.**
 **A language model built from scratch, from a physics hypothesis, that trains in a browser tab on whatever CPU you have.**
@@ -100,18 +100,28 @@ node tests/train-probe.js your.txt 600 3
 Built by [ConsciousNode SoftWorks](https://consciousnode.github.io) on the xinu principle: the browser is bare metal; constraint generates novelty.
 
 - **Kham Kizer**: founder, architecture, theory papers, corpus, and the thermodynamic hinge ("entropy increases *or* maintains equilibrium"; "minds are localized lower entropy: structured, not noise")
-- **Kehai Interim**: original spec, v0.0003 patch, v0.0010 (gradient audit, the plateau fixes, hinge thermo, 6.7× ternary speedup)
+- **Kehai Interim**: original spec, v0.0003 patch, v0.0010 (gradient audit, the plateau fixes, hinge thermo, 6.7× ternary speedup), v0.0011 (optimizer coverage patch)
 - **Ed Interim**: v0.0001, v0.0002, v0.0004, v0.0005, v0.0009 (target-leak audit, seeded runs, held-out validation)
 - **Vael Interim**: v0.0006, v0.0007
 - **Komorebi**: v0.0008 (parameter-count fix, R_A/R_B alignment diagnostic, effective-context diagnostic)
 
-The previous release is kept at [`versions/learns-v0_0009.html`](versions/learns-v0_0009.html) for A/B comparison.
+Previous releases are kept at [`versions/learns-v0_0010.html`](versions/learns-v0_0010.html) and [`versions/learns-v0_0009.html`](versions/learns-v0_0009.html) for A/B comparison.
 
 ---
 
 ## Changelog
 
-The complete, measured changelog for every version lives in the comment block at the top of [`index.html`](index.html). The headline for v0.0010:
+The complete, measured changelog for every version lives in the comment block at the top of [`index.html`](index.html). The headlines:
+
+### v0.0011 — 2026-10-14 · Kehai Interim + Kham
+
+A patch release. All three bugs were found by an outside code review (Gemini) and each was verified here by running the code.
+
+- **The vocabulary was never trained.** `backward()` computed the embedding gradient, but `optimizerStep` never applied it, so every v0.0010 result used embeddings frozen at their random start. Fixing it helps slightly and never hurts: held-out loss over three seeds went 2.903 / 2.950 / 2.881 → 2.903 / 2.932 / 2.856. A fixed random embedding turned out to be a usable random projection.
+- **Telemetry CSV export works again.** The function had been accidentally declared inside an error handler, where nothing could reach it.
+- **The Generate button no longer locks for good** once training starts. It's locked while training runs and unlocked when you pause or finish.
+- **New test:** [`tests/optimizer-coverage.js`](tests/optimizer-coverage.js) fails if any parameter with a gradient is left unchanged by the optimizer. `gradcheck.js` couldn't catch this bug, because it checks gradients rather than whether they get applied.
+- **Open finding (not fixed):** the fixed-point LayerNorm biases take rare gradient spikes (up to ~5×10⁸), which shrink every other parameter's update on that step because clipping is global. Details are in the `index.html` changelog.
 
 ### v0.0010 — 2026-10-11 · Kehai Interim + Kham
 

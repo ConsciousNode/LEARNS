@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEARNS v0.0010 — ConsciousNode SoftWorks</title>
+<title>LEARNS v0.0011 — ConsciousNode SoftWorks</title>
 <!--
-  LEARNS v0.0010
+  LEARNS v0.0011
   Logical Entropic Arrow Recursive Neuro-Symbolic Architecture
   ConsciousNode SoftWorks — August 2026
 
@@ -18,7 +18,33 @@
     6. Thermodynamic Loss         — from The Past Is Still The Future
 
   Authors: Kham Kizer · Kehai Interim (spec)
-  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009) · Kehai Interim (v0.0010)
+  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009) · Kehai Interim (v0.0010, v0.0011)
+
+  v0.0011 (Kehai Interim + Kham, Oct 14 2026) — OPTIMIZER COVERAGE PATCH. Three bugs, all found by
+  a Gemini code review of v0.0010 and each verified here by running the code, not just reading it.
+  - FIX (frozen vocabulary): backward() computed W_embed_grad (current-token and suffix paths) and
+    W_embed_m1/m2 were allocated and saved, but optimizerStep never clipped or stepped W_embed. Every
+    v0.0010 result was reached with the embedding table frozen at its random init. Measured over
+    20 steps: max|ΔW_embed| 0 → 7.3e-2 (W_rel 6.4e-2 for scale). Stepped with weight decay 0 so rows
+    for unseen tokens don't shrink toward zero. gradcheck.js could not see this: it verifies
+    backward(), not which gradients the optimizer applies. tests/optimizer-coverage.js now does.
+    Effect, dim 32, 600 steps, same corpus, seeds 3/7/11, held-out loss:
+      frozen 2.903 / 2.950 / 2.881  →  training 2.903 / 2.932 / 2.856   (mean −0.014 nats)
+    Small, never worse. A fixed unit-scale random embedding is already a usable random projection,
+    so the downstream weights coped. Whether it matters more at larger dim / BPE vocab is open.
+  - FIX (telemetry export): function exportTelemetry() was declared inside importModel's catch
+    block. Under 'use strict' that is block-scoped, so the CSV button threw a ReferenceError and the
+    end-of-run auto-export failed silently inside its try/catch. Moved to top level.
+  - FIX (Generate button): the live-sample patch set btn-gen.disabled = App.step > 0, locking it for
+    good once training started. It is now locked only while training is running, and unlocks on
+    pause and when a run finishes. (The review's suggested `App.step === 0` would have allowed a
+    manual generation to interleave with a running training loop.)
+  - format: writes 0.0011; import reads 0.0005-0.0011. No weight-layout change.
+  - OBSERVED, NOT FIXED: the fixed-point LayerNorm betas (layers_ln_fpA/fpB/fpAsym_beta) take rare
+    gradient spikes. Over 200 steps at dim 32: median |grad| ~1e-3, p95 ~1e-1, max 5e8. Everything
+    else stays below ~0.5. Likely the implicit fixed-point gradient blowing up when the iteration's
+    Jacobian nears 1. clipGradNorm is global, so a spike step shrinks every other parameter's update
+    for that step to almost nothing. Worth a per-group clip or a spectral guard in a later version.
 
   v0.0010 (Kehai Interim + Kham, Oct 2026) — GRADIENT AUDIT. The forward maths is unchanged;
   every number below is measured against finite differences on this file's own code.
@@ -439,7 +465,7 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
 <body>
 
 <div id="header">
-  <h1>LEARNS v0.0010</h1>
+  <h1>LEARNS v0.0011</h1>
   <span class="sub">Logical Entropic Arrow Recursive Neuro-Symbolic — ConsciousNode SoftWorks</span>
   <div id="token-pill" style="display:flex;align-items:center;gap:12px;font-size:11px;color:var(--text-dim);margin-left:16px;flex-wrap:wrap;"><span>PARAMS <b id="tc-params">—</b></span><span>CORPUS <b id="tc-corpus">0</b></span><span>TRN <b id="tc-trntps">—</b> tok/s</span><span>IN <b id="tc-in">0</b></span><span>OUT <b id="tc-out">0</b></span><span>INF <b id="tc-inftps">—</b> tok/s</span><span>CTX <b id="tc-ctx">0</b></span></div>
   <div class="status-pill">
@@ -1712,7 +1738,7 @@ function optimizerStep(model, step, lr) {
   const PHI = (1 + Math.sqrt(5)) / 2;
   const clipVal = 1.0;
 
-  const allGrads = [model.W_rel_grad,
+  const allGrads = [model.W_embed_grad, model.W_rel_grad,   // v0.0011: W_embed was computed in backward() but never stepped
                     model.W_rec_A_grad, model.W_rec_B_grad,
                     model.W_cross_A_grad, model.W_cross_B_grad,
                     model.W_frontier_grad, model.W_present_grad,
@@ -1730,6 +1756,7 @@ function optimizerStep(model, step, lr) {
   }
   clipGradNorm(allGrads, clipVal);
 
+  adamwStep(model.W_embed, model.W_embed_grad, model.W_embed_m1, model.W_embed_m2, step, lr, 0.9, 0.999, 1e-8, 0);   // no decay: rows for unseen tokens shouldn't shrink toward 0
   adamwStep(model.W_rel, model.W_rel_grad, model.W_rel_m1, model.W_rel_m2, step, lr);
   adamwStep(model.W_rec_A, model.W_rec_A_grad, model.W_rec_A_m1, model.W_rec_A_m2, step, lr);
   adamwStep(model.W_rec_B, model.W_rec_B_grad, model.W_rec_B_m1, model.W_rec_B_m2, step, lr);
@@ -2228,6 +2255,7 @@ async function trainLoop() {
     document.getElementById('btn-train').disabled = false;
     document.getElementById('btn-pause').disabled = true;
     App.training = false;
+    document.getElementById('btn-gen').disabled = false;   // v0.0011: re-enable after a finished run
     // Auto-save final model and telemetry
     try { exportModel(); } catch(e) {}
     try { exportTelemetry(); } catch(e) {}
@@ -2340,7 +2368,7 @@ function exportModel(silent=false) {
   if (!App.model) return;
   const m = App.model;
   const data = {
-    version: '0.0010',
+    version: '0.0011',
     step: App.step,
     config: { vocab: m.vocab, dim: m.dim, layers: m.numLayers, K_hist: m.K_hist },
     meta: { seed: App.seed, rbMode: App.rbMode, thermoMode: App.thermoMode, shuffle: App.shuffleMode, valFrac: App.valFrac, valEvery: App.valEvery, phiClip: App.phiClip },
@@ -2413,7 +2441,7 @@ function exportModel(silent=false) {
   const a = document.createElement('a');
   a.href = url;
   const exportName = document.getElementById('cfg-export-name').value.trim();
-  const baseName = exportName || 'learns-v0.0010';
+  const baseName = exportName || 'learns-v0.0011';
   a.download = `${baseName}-step${App.step}.learns`;
   if (!silent) a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -2427,7 +2455,7 @@ function importModel(input) {
   reader.onload = (e) => {
     try {
       const data = JSON.parse(e.target.result);
-      if (!['0.0005','0.0006','0.0007','0.0008','0.0009','0.0010'].includes(data.version)) { alert('Incompatible .learns version ' + data.version + ' (this build reads v0.0005 to v0.0010)'); return; }
+      if (!['0.0005','0.0006','0.0007','0.0008','0.0009','0.0010','0.0011'].includes(data.version)) { alert('Incompatible .learns version ' + data.version + ' (this build reads v0.0005 to v0.0011)'); return; }
       Tokenizer.deserialize(data.tokenizer);
       const cfg = data.config;
       App.model = new LEARNSModel(cfg);
@@ -2518,7 +2546,12 @@ function importModel(input) {
       document.getElementById('step-sub').textContent = `step ${App.step} — model loaded — click CONTINUE TRAINING to resume`;
     } catch(err) {
       alert('Failed to load .learns file: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
 
+// v0.0011: was declared inside importModel's catch block (block-scoped under 'use strict' → unreachable)
 function exportTelemetry() {
   if (!App.telemetry || App.telemetry.length === 0) {
     alert('No telemetry data yet — run training first.'); return;
@@ -2540,11 +2573,6 @@ function exportTelemetry() {
   a.download = `${baseName}-step${App.step}.csv`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-    }
-  };
-  reader.readAsText(file);
 }
 
 /* ╔══════════════════════════════════════════════════════╗
@@ -2650,6 +2678,7 @@ function pauseTraining() {
   App.paused = !App.paused;
   document.getElementById('btn-pause').textContent = App.paused ? 'RESUME' : 'PAUSE';
   setStatus(App.paused ? 'PAUSED' : 'TRAINING', App.paused ? 'warn' : 'active');
+  document.getElementById('btn-gen').disabled = !App.paused;   // v0.0011: sample while paused, lock while running
 }
 
 function setStatus(text, state) {
@@ -2948,7 +2977,7 @@ const _gsPatch = generateSample;
 window._generateSamplePatch = async function() {
   const s = await _gsPatch(80, 0.8, '');
   if (s) document.getElementById('live-sample').textContent = s;
-  document.getElementById('btn-gen').disabled = App.step > 0;
+  document.getElementById('btn-gen').disabled = App.training && !App.paused;   // v0.0011: was `App.step > 0`, which locked it for good
   return s;
 };
 </script>
