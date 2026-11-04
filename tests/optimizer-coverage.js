@@ -1,46 +1,83 @@
 // Does optimizerStep actually apply every gradient that backward() computes?
-// gradcheck.js verifies the gradients themselves; this catches a parameter the optimizer skips
-// (v0.0010 computed W_embed_grad but never stepped W_embed).
-// usage: node tests/optimizer-coverage.js [file.html]   — exits 1 if any parameter with a nonzero
-// gradient is left unchanged after a few training steps.
-const fs = require('fs'), vm = require('vm'), path = require('path');
-const file = process.argv.slice(2).find(a => a.endsWith('.html')) || path.join(__dirname, '..', 'index.html');
-const src = fs.readFileSync(file, 'utf8');
-const a = src.indexOf('function mulberry32(a) {'), b = src.lastIndexOf('/*', src.indexOf('BPE TOKENIZER'));
-const c = src.indexOf('class LEARNSModel {'), d = src.indexOf('function computeEffectiveWindow', c);
-const e = src.indexOf('function scoutBackwardPass'), f = src.indexOf('/* ── v0.0009: controls', e);
-const App = { phiClip: true };
-const ctx = { Math, Float32Array, Int8Array, WeakMap, Array, Object, console, Promise, setTimeout, App, yieldToMain: () => Promise.resolve() };
-vm.createContext(ctx);
-vm.runInContext([src.slice(a, b), src.slice(c, d), src.slice(e, f), 'this.X = { LEARNSModel, seedRNG, rand, optimizerStep, trainChunk };'].join('\n'), ctx);
-const X = ctx.X; X.seedRNG(1);
-const m = new X.LEARNSModel({ vocab: 64, dim: 16, layers: 2, K_hist: 16 });
-App.model = m; App.trainState = m.getEmptyState();
-const cfg = { lambda: 0.05, maxFPIter: 6, innerFPMax: 4, fpEps: 1e-4, rbMode: 'causal', contiguous: false, frontierPresent: true, thermoMode: 'hinge' };
+// Verifies LEARNS (across all Tier 2 switches) and every Tier 3 baseline (GRU, Transformer).
+// Usage:
+//   node tests/optimizer-coverage.js [file.html] [switch=val | arch=gru | arch=transformer | --all]
+const path = require('path');
+const args = process.argv.slice(2);
+const file = args.find(a => a.endsWith('.html')) || path.join(__dirname, '..', 'index.html');
+const L = require('./load.js')(file, { f64: false, ternary: true });
 
-// every <name>_grad on the model whose <name> is also present (single arrays and per-layer lists)
-const flat = v => (Array.isArray(v) ? v : [v]).filter(x => x && typeof x.length === 'number');
-const names = Object.keys(m).filter(k => k.endsWith('_grad') && m[k.slice(0, -5)] !== undefined).map(k => k.slice(0, -5));
-const before = Object.fromEntries(names.map(n => [n, flat(m[n]).map(x => Float64Array.from(x))]));
-const gradSeen = Object.fromEntries(names.map(n => [n, 0]));
-const absMax = arrs => arrs.reduce((mx, x) => { for (const v of x) mx = Math.max(mx, Math.abs(v)); return mx; }, 0);
-
-(async () => {
-  for (let s = 1; s <= 5; s++) {
-    const seq = Array.from({ length: 17 }, () => Math.floor(X.rand() * 64));
-    await X.trainChunk(seq, cfg);
-    for (const n of names) gradSeen[n] = Math.max(gradSeen[n], absMax(flat(m[n + '_grad'])));
-    X.optimizerStep(m, s, 6e-3);
+async function checkCoverageFor(specStr, verbose = true) {
+  L.seedRNG(1);
+  const cfg = L.parseConfig(specStr, {
+    vocab: 64, dim: 16, layers: 2, chunk: 16,
+    lambda: 0.05, fpIters: 6, innerFP: 4, fpEps: 1e-4,
+    rbMode: 'causal', frontierPresent: 'on', thermo: 'hinge'
+  });
+  if (cfg.arch === 'ngram' || cfg.arch === 'unigram' || cfg.arch === 'bigram' || cfg.arch === 'trigram' || cfg.arch === '5gram') {
+    if (verbose) console.log(`ALL OK (arch=${cfg.arch} has no gradient parameters)`);
+    return 0;
   }
-  let bad = 0;
+
+  const m = L.createModel(Object.assign({}, cfg, { vocab: 64, dim: 16, layers: 2, K_hist: 16 }));
+  L.App.model = m;
+  L.App.trainState = m.getEmptyState();
+  L.App.prevScoutRB = null;
+  L.App.phiClip = cfg.phiClip !== 'off';
+
+  const flat = v => (Array.isArray(v) ? v : [v]).filter(x => x && typeof x.length === 'number');
+  const names = Object.keys(m).filter(k => k.endsWith('_grad') && m[k.slice(0, -5)] !== undefined).map(k => k.slice(0, -5));
+  const before = Object.fromEntries(names.map(n => [n, flat(m[n]).map(x => Float64Array.from(x))]));
+  const gradSeen = Object.fromEntries(names.map(n => [n, 0]));
+  const absMax = arrs => arrs.reduce((mx, x) => { for (const v of x) mx = Math.max(mx, Math.abs(v)); return mx; }, 0);
+
+  for (let s = 1; s <= 5; s++) {
+    const seq = Array.from({ length: 17 }, () => Math.floor(L.rand() * 64));
+    cfg.contiguous = (s > 1);
+    await L.trainChunk(seq, cfg);
+    for (const n of names) gradSeen[n] = Math.max(gradSeen[n], absMax(flat(m[n + '_grad'])));
+    L.optimizerStep(m, s, 6e-3, cfg);
+  }
+
+  let bad = 0, activeStepped = 0;
   for (const n of names) {
     const after = flat(m[n]);
     let moved = 0;
     after.forEach((x, i) => { for (let j = 0; j < x.length; j++) moved = Math.max(moved, Math.abs(x[j] - before[n][i][j])); });
-    const skipped = gradSeen[n] > 0 && moved === 0;
+    const skipped = (gradSeen[n] > 0 && moved === 0) || !Number.isFinite(gradSeen[n]) || !Number.isFinite(moved);
     if (skipped) bad++;
-    console.log(`${n.padEnd(26)} max|grad| ${gradSeen[n].toExponential(2)}  max|Δ| ${moved.toExponential(2)}  ${skipped ? 'NOT STEPPED' : 'ok'}`);
+    if (gradSeen[n] > 0 && moved > 0) activeStepped++;
+    if (verbose) {
+      console.log(`${n.padEnd(26)} max|grad| ${gradSeen[n].toExponential(2)}  max|Δ| ${moved.toExponential(2)}  ${skipped ? 'NOT STEPPED' : (gradSeen[n] === 0 ? 'off (0 grad)' : 'ok')}`);
+    }
   }
-  console.log(bad ? `FAIL: ${bad} parameter(s) have gradients the optimizer never applies` : `ALL OK (${names.length} parameters stepped)`);
-  process.exit(bad ? 1 : 0);
+  const tag = specStr ? ` [${specStr}]` : '';
+  console.log(bad ? `FAIL${tag}: ${bad} parameter(s) have gradients the optimizer never applies` : `ALL OK${tag} (${activeStepped}/${names.length} active parameters stepped)`);
+  return bad;
+}
+
+(async () => {
+  if (args.includes('--all')) {
+    const specs = [
+      '',
+      'relEmbed=off', 'coreA=off', 'coreB=off', 'innerFP=2', 'innerFP=8',
+      'fpIters=0', 'fpIters=1', 'fpIters=2', 'fpIters=6', 'fpIters=12', 'fpInject=on',
+      'recordA=off', 'recordB=off', 'rbMode=prevrev',
+      'frontierPresent=off', 'frontierHelix=off',
+      'helix=off', 'helixRotation=none', 'helixRetention=fixed', 'helixRetention=none',
+      'thermo=off', 'thermo=linear', 'thermo=hinge',
+      'weights=float32', 'weights=ternary', 'clipMode=per_group', 'phiClip=off',
+      'arch=gru', 'arch=gru;weights=float32',
+      'arch=transformer', 'arch=transformer;weights=float32'
+    ];
+    let totalBad = 0;
+    for (const s of specs) totalBad += await checkCoverageFor(s, false);
+    console.log(totalBad ? `TOTAL FAILED: ${totalBad}` : `ALL OK (${specs.length} configurations verified)`);
+    process.exit(totalBad ? 1 : 0);
+  } else {
+    const nonHtmlArgs = args.filter(a => !a.endsWith('.html'));
+    const spec = nonHtmlArgs.join(';');
+    const bad = await checkCoverageFor(spec, true);
+    process.exit(bad ? 1 : 0);
+  }
 })();
