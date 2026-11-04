@@ -188,3 +188,46 @@ We ran the full $5 \times 2$ grid of `fpIters ∈ {0, 1, 2, 6, 12}` $\times$ `fp
 ## Part 4: One Honest Paragraph
 
 What do LEARNS's six paper-derived components actually contribute on *The Adventures of Sherlock Holmes*? Only one pathway is demonstrably essential across all five seeds: the damped helical working state (`helix=on` with learned decay `helixRetention=learned`, from *The Drill of Entropy*) read out directly at the frontier via `W_present` (`frontierPresent=on` and `frontierHelix=on`). Removing that fast working-state pathway collapses LEARNS to worse than a unigram table (`3.16–3.77` nats/byte), whereas the slow dual records ($R_A, R_B$) cannot carry character-level prediction on their own. Worse, Relational Embedding (`relEmbed=on`, from *It's All Relative*) actively hurts performance on every single seed: turning it off (`relEmbed=off`) lowers mean test loss from `3.0221` to `2.8498` nats/byte ($\Delta = -0.1723$, winning 5/5 seeds) because adding the record projection directly to the token embedding blurs the current byte's identity. Meanwhile, Component A (`coreA`), Component B (`coreB`), the Dyadic Fixed Point iteration (`fpIters=6` vs `fpIters=0`), Givens rotation (`helixRotation`), `prevrev` record seeding, and the Thermodynamic Hinge Loss (`thermo=hinge` vs `off`) are all statistically indistinguishable from noise across five seeds at this budget, and the dyadic map never actually converges to a fixed point because LayerNorm re-inflates the state norm to $\sqrt{d}$ at every iteration. Against fair, parameter-matched baselines trained in the exact same harness with the same learning-rate sweep, LEARNS ranks **last among neural models** at both 54k parameters (`dim=32`: float32 GRU `2.5211`, ternary GRU `2.8348`, float32 Transformer `2.8591`, ternary Transformer `2.8943`, vs ternary LEARNS `3.0221` and float32 LEARNS `3.1289`) and 168k parameters (`dim=64`: float32 GRU `2.3981`—which beats the Kneser–Ney bigram floor of `2.4349`—and float32 Transformer `2.7819`, vs float32 LEARNS `2.9339` and ternary LEARNS `3.1419`), while running $3\times$ to $6\times$ slower than a GRU.
+
+---
+
+## Audit (Kehai Interim, 2026-11-04)
+
+*The report above was written by Gemini Argon from Kehai's v0.0012 prompt. This section is the audit; nothing above it has been changed.*
+
+### What holds
+- **Defaults are bit-identical to v0.0011.** `node tests/repro-v0011.js` trains both versions for 40 steps from the same seed and compares every loss at full precision (all ~16 stored digits, not the rounded print): 40/40 identical.
+- **Gradients and optimizer coverage.** `node tests/gradcheck.js --all` → ALL OK (31 configurations); `node tests/optimizer-coverage.js --all` → ALL OK (32 configurations).
+- **The numbers reproduce exactly.** I reran 5-gram and bigram KN, GRU (dim 32, float32, seed 3), full LEARNS (seed 3) and LEARNS `relEmbed=off` (seed 3) from the report's own commands. Every validation and test loss matches `results.jsonl` to all six printed decimals, with the same `CODE_HASH 0xfe2cf657` / `CORPUS_HASH 0x39c84ca9`.
+- **Selection was done on validation.** The learning-rate sweep used validation only (the 60 sweep runs in `results.jsonl` have no test loss). The headline ablation finding, `relEmbed=off` helps, also holds on **validation** (better on 5/5 seeds, by 0.08–0.24 nats), so it isn't an artefact of reading the test split.
+
+### What the report doesn't say: the budget
+`tests/run.js` takes chunk *n* from byte `n × 64` of the training split, so with `--steps 150` **every neural model trains on only the first 9,600 bytes** of the 449,923-byte training split. That's 2% of it, read once (roughly the opening pages of "A Scandal in Bohemia"), and 100 of the 150 steps are learning-rate warmup. The **n-gram tables are fitted on the whole training split**, 47× more text. So:
+- "5-gram/trigram/bigram beat the neural models" mostly measures that data gap, not the architectures.
+- Among the neural models the comparison is fair (same bytes, same steps, same sweep), but it measures **how fast each model gets started**, not how good it can get.
+- The note under the README leaderboard ("at 600 steps LEARNS reaches 2.53, still trailing a 150-step GRU at 2.50") compares a 600-step LEARNS with a 150-step GRU. A 600-step GRU would be far ahead.
+
+### A longer run: 1,000 steps (64,000 bytes, 14% of training), seed 3
+Same commands with `--steps 1000`, same validation-picked learning rates (picked at 150 steps, so not re-tuned; one seed). Raw lines in `results-audit-1000steps.jsonl`.
+
+| dim 32, seed 3 | test loss, 150 steps | test loss, 1,000 steps | tok/s |
+|---|---|---|---|
+| GRU, float32 | 2.537 | **2.053** | 1,934 |
+| GRU, ternary | (2.67–2.93 over 5 seeds) | **2.105** | 1,965 |
+| Transformer, float32 | (2.82–2.90) | 2.421 | 1,245 |
+| Transformer, ternary | (2.84–2.94) | 2.426 | 1,272 |
+| LEARNS, `relEmbed=off` | 2.847 | 2.445 | 368 |
+| LEARNS, default | 2.929 | 2.457 | 331 |
+| *bigram KN (full training split)* | *2.435* | *2.435* | |
+
+- **LEARNS is still last among the neural models**, but its gap to the transformer shrinks from ~0.2 to ~0.03 nats. The GRU pulls clearly ahead of both (~0.4 nats).
+- **Ternary costs the GRU only 0.05 nats** at 1,000 steps (vs ~0.3 at 150), so the ternary penalty is partly a slow-start effect too.
+- **The `relEmbed` effect shrinks from 0.17 to 0.01 nats.** At 150 steps it reliably hurts; whether it still hurts with real training is open (one seed here).
+- LEARNS is 5–6× slower per token than the GRU at this size.
+
+### Smaller things
+- `fpIters=0` is described as both "18% faster" (README) and "33% faster" (Part 3). From the tok/s column (650 vs 550), it is ~18% more throughput.
+- `corpus.txt` is now in the repo (public domain), so the commands run as written.
+
+### Verdict
+At this scale and budget, **no LEARNS component beats a plain GRU, and LEARNS as a whole doesn't either.** That's an honest, useful answer, and v0.0012 is the first version that can give one. Within LEARNS, the damped helix read out at the frontier is the part doing the work, consistently across seeds. The dyadic fixed point doesn't converge (LayerNorm re-inflates the state every iteration), and is indistinguishable from no iteration at all. The open question worth the next run is whether the gaps keep shrinking with more data. For that, `run.js` should cover the whole training split (strided or shuffled chunk starts), and the runs need a budget closer to a full pass.

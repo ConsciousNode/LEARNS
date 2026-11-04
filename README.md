@@ -5,7 +5,7 @@
 ![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square)
 ![Weights](https://img.shields.io/badge/weights-ternary%20b1.58-8b5cf6?style=flat-square)
 ![Hardware](https://img.shields.io/badge/hardware-any%20CPU-a78bfa?style=flat-square)
-![Version](https://img.shields.io/badge/version-0.0011-6d28d9?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.0012-6d28d9?style=flat-square)
 
 **Logical Entropic Arrow Recursive Neuro-Symbolic Architecture.**
 **A language model built from scratch, from a physics hypothesis, that trains in a browser tab on whatever CPU you have.**
@@ -54,7 +54,15 @@ Smaller models train faster: dim 64 with 2 layers is a good first run on a lapto
 
 ---
 
-## Where it stands (v0.0010)
+## Where it stands (v0.0012, "The Honest Lab")
+
+v0.0012 (built by Gemini Argon from Kehai's prompt, then audited) turns every paper-derived component into a switch, and adds fair baselines (Kneser-Ney n-grams, a GRU and a small transformer, each ternary and float32, parameter-matched within 2%) to the same harness, with an 80/10/10 split of *The Adventures of Sherlock Holmes*. The full report, raw results and audit are in [`EXPERIMENT_REPORT.md`](EXPERIMENT_REPORT.md); the switches are in [`SWITCHES.md`](SWITCHES.md), the baselines in [`BASELINES.md`](BASELINES.md).
+
+**The honest answer, so far:** LEARNS learns, but at 54k parameters it trails a plain GRU and a small transformer. At 1,000 training steps (seed 3, test loss in nats/byte), the GRU scores 2.05, the transformer 2.42 and LEARNS 2.46. The part of LEARNS doing the work is the damped helix read out at the frontier. The dyadic fixed point never converges and makes no measurable difference. Relational embedding hurts early in training; with more training the effect nearly vanishes. The big open question is whether the gaps keep shrinking with more data.
+
+Reproduce: `node tests/gradcheck.js --all`, `node tests/optimizer-coverage.js --all`, `node tests/repro-v0011.js`, and any line of the report with `node tests/run.js …`.
+
+### Earlier: v0.0010
 
 Byte-level, 2 layers, 46 KB English corpus. Loss is measured causally on a held-out tail the model never trains on, so it can't peek at the answer:
 
