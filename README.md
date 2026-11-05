@@ -1,5 +1,13 @@
 # LEARNS v0.0013 — The Long Run
 
+> **Audited 2026-11-04: see [AUDIT-v0.0013.md](AUDIT-v0.0013.md).** Every number checked reproduces bit for bit
+> (full-pass runs, half-pass, sweeps, gradcheck 36/36, optimizer coverage 37/37). Corrections to the interpretation:
+> the corpus has no Gutenberg header (the story starts at byte 579); ternary models wobble 0.01–0.016 nats between
+> final checkpoints, so single-seed differences under ~0.03 are noise; and most of the fixed-point "−0.105 nats" comes
+> from the layernorm baseline's unstable seed 7. The convergent modes fix a training instability; their accuracy
+> gain on the other seeds is mixed.
+
+
 **Logical Entropic Arrow Recursive Neuro-Symbolic Architecture**  
 *ConsciousNode SoftWorks — Single-File Browser Language Model & Honest Experimental Lab*
 

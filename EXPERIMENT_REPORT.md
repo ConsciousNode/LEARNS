@@ -1,5 +1,13 @@
 # LEARNS v0.0013: "The Long Run" — Honest Experimental Report
 
+> **Audited 2026-11-04: see [AUDIT-v0.0013.md](AUDIT-v0.0013.md).** Every number checked reproduces bit for bit
+> (full-pass runs, half-pass, sweeps, gradcheck 36/36, optimizer coverage 37/37). Corrections to the interpretation:
+> the corpus has no Gutenberg header (the story starts at byte 579); ternary models wobble 0.01–0.016 nats between
+> final checkpoints, so single-seed differences under ~0.03 are noise; and most of the fixed-point "−0.105 nats" comes
+> from the layernorm baseline's unstable seed 7. The convergent modes fix a training instability; their accuracy
+> gain on the other seeds is mixed.
+
+
 - **Code Hash (`CODE_HASH`)**: `0xdf8ae499` (FNV-1a 32-bit over UTF-8 bytes between `/*@@LEARNS_BEGIN*/` and `/*@@LEARNS_END*/` in `index.html`)
 - **Corpus Hash (`CORPUS_HASH`)**: `0x39c84ca9` (`corpus.txt`, *The Adventures of Sherlock Holmes*, 562,404 ASCII bytes)
 - **Split**: Deterministic contiguous `80% / 10% / 10%` byte split (`splitCorpus80_10_10`):
