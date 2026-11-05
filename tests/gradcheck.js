@@ -1,11 +1,11 @@
-// Full finite-difference gradient check of LEARNS v0.0013 (all Tier 2 switches including fpNorm=layernorm|none|rescale) and Tier 3 baselines (GRU, Transformer) over a 3-step sequence with BPTT.
+// Full finite-difference gradient check of LEARNS v0.0014 (all Tier 2/3/4 switches including fpNorm, helixState, scoutScale, ema) and Tier 3 baselines (GRU, Transformer) over a 3-step sequence with BPTT.
 // Usage:
-//   node tests/gradcheck.js                     (default LEARNS)
-//   node tests/gradcheck.js inject              (with FP input injection)
-//   node tests/gradcheck.js fpNorm=rescale      (any Tier 2 switch or L12:... string)
+//   node tests/gradcheck.js                     (default LEARNS v0.0014: fpNorm=rescale;fpInject=on)
+//   node tests/gradcheck.js fpNorm=layernorm;fpInject=off (legacy v0.0011/v0.0012 default)
+//   node tests/gradcheck.js helixState=per_layer
 //   node tests/gradcheck.js arch=gru            (GRU baseline)
 //   node tests/gradcheck.js arch=transformer    (Transformer baseline)
-//   node tests/gradcheck.js --all               (runs default, inject, every Tier 2 switch, and every baseline)
+//   node tests/gradcheck.js --all               (runs default, legacy, every switch, and every baseline)
 const path = require('path');
 const args = process.argv.slice(2);
 const htmlFile = args.find(a => a.endsWith('.html')) || path.join(__dirname, '..', 'index.html');
@@ -20,14 +20,11 @@ function runGradcheckFor(specStr, verbose = true) {
     fpIters: 4, innerFP: 3, fpEps: 1e-14,
     lambda: 0.3, thermo: 'linear', frontierPresent: 'on', weights: 'float32'
   });
-  // If user didn't explicitly pass thermo=..., use linear (v0.0011 gradcheck default) unless thermo=hinge or thermo=off was passed
   if (!String(specStr).includes('thermo=')) parsed.thermo = 'linear';
   if (!String(specStr).includes('lambda=')) parsed.lambda = 0.3;
   if (!String(specStr).includes('fpIters=') && !String(specStr).includes('maxFPIter=')) parsed.fpIters = 4;
   if (!String(specStr).includes('innerFP=')) parsed.innerFP = 3;
   parsed.fpEps = 1e-14;
-
-  // In float mode (default for gradcheck), check all weights; if weights=ternary is explicitly passed, check in float mode so STE weights are differentiable
   parsed.weights = 'float32';
 
   if (parsed.arch === 'ngram' || parsed.arch === 'unigram' || parsed.arch === 'bigram' || parsed.arch === 'trigram' || parsed.arch === '5gram') {
@@ -37,9 +34,10 @@ function runGradcheckFor(specStr, verbose = true) {
 
   const m = L.createModel(Object.assign({}, parsed, { vocab: V, dim, layers, K_hist: 4, hiddenDim: 8, tfDim: 8, tfFF: 16, nHeads: 2, maxCtx: 8 }));
   const bigScale = m.arch === 'gru' ? 1.5 : 15;
-  const big = W => { for (let i = 0; i < W.length; i++) W[i] *= bigScale; };
   for (const k of Object.keys(m)) {
     if (/^(W_|layers_W_|b_|layers_b_)/.test(k) && !/_grad|_m1|_m2/.test(k)) {
+      const sc = (m.arch === 'learns' && /W_F[AB]/.test(k) && parsed.fpIters >= 12) ? 35 : bigScale;
+      const big = W => { for (let i = 0; i < W.length; i++) W[i] *= sc; };
       const v = m[k];
       if (Array.isArray(v)) v.forEach(big);
       else if (v && typeof v.length === 'number') big(v);
@@ -48,7 +46,6 @@ function runGradcheckFor(specStr, verbose = true) {
   if (m.layers_thetas) for (const T of m.layers_thetas) for (let i = 0; i < T.length; i++) T[i] = 0.3 * (i + 1);
   if (m.layers_rho) for (const R of m.layers_rho) for (let i = 0; i < R.length; i++) R[i] = 0.4 * (i % 5) - 0.6;
   if (m.layers_ln_fpA_beta) for (let l = 0; l < layers; l++) for (let i = 0; i < dim; i++) { m.layers_ln_fpA_beta[l][i] = 0.1 * (i - 3.5); m.layers_ln_fpB_beta[l][i] = 0.1 * (3.5 - i); }
-  // For hinge mode, ensure dS_chunk < 0 so hinge is active and differentiable
   if (parsed.thermo === 'hinge' && m.W_rec_A) {
     for (let i = 0; i < m.W_rec_A.length; i++) m.W_rec_A[i] *= 3;
     for (let i = 0; i < m.W_rec_B.length; i++) m.W_rec_B[i] *= 3;
@@ -125,7 +122,7 @@ function runGradcheckFor(specStr, verbose = true) {
     p[seq[t + 1]] -= 1;
     for (let j = 0; j < p.length; j++) p[j] /= n;
     const r = m.backward(p, outs[t].caches, cfg, g);
-    g = m.arch === 'learns' ? { R_A: r.grad_R_A_prev, R_B: r.grad_R_B_prev, h: r.grad_h } : r;
+    g = m.arch === 'learns' ? { R_A: r.grad_R_A_prev, R_B: r.grad_R_B_prev, h: r.grad_h, hs: r.hs } : r;
   }
 
   const eps = 1e-6;
@@ -179,22 +176,22 @@ function runGradcheckFor(specStr, verbose = true) {
     }
   }
 
-  const label = specStr === '' ? 'without FP input injection' : (specStr === 'inject' ? 'with FP input injection' : specStr);
+  const label = specStr === '' ? 'default v0.0014 (fpNorm=rescale;fpInject=on)' : (specStr === 'inject' ? 'with FP input injection' : specStr);
   console.log(fails ? `${fails} FAILED (${label})` : `ALL OK (${label})`);
   return fails;
 }
 
 if (args.includes('--all')) {
   const specs = [
-    '', 'inject',
+    '', 'inject', 'fpNorm=layernorm;fpInject=off',
     'relEmbed=off', 'coreA=off', 'coreB=off', 'innerFP=2', 'innerFP=8',
-    'fpIters=0', 'fpIters=1', 'fpIters=2', 'fpIters=6', 'fpIters=12', 'fpInject=on',
-    'fpNorm=layernorm', 'fpNorm=none', 'fpNorm=rescale', 'fpNorm=none;fpInject=on', 'fpNorm=rescale;fpInject=on',
-    'recordA=off', 'recordB=off', 'rbMode=prevrev',
+    'fpIters=0', 'fpIters=1', 'fpIters=2', 'fpIters=6', 'fpIters=12', 'fpInject=off', 'fpInject=on',
+    'fpNorm=layernorm', 'fpNorm=none', 'fpNorm=rescale', 'fpNorm=none;fpInject=off', 'fpNorm=rescale;fpInject=off',
+    'recordA=off', 'recordB=off', 'rbMode=prevrev', 'scoutScale=0',
     'frontierPresent=off', 'frontierHelix=off',
-    'helix=off', 'helixRotation=none', 'helixRetention=fixed', 'helixRetention=none',
+    'helix=off', 'helixRotation=none', 'helixRetention=fixed', 'helixRetention=none', 'helixState=per_layer',
     'thermo=off', 'thermo=linear', 'thermo=hinge',
-    'weights=float32', 'weights=ternary', 'clipMode=per_group', 'phiClip=off',
+    'weights=float32', 'weights=ternary', 'clipMode=per_group', 'phiClip=off', 'ema=on',
     'arch=gru', 'arch=transformer'
   ];
   let totalFails = 0;

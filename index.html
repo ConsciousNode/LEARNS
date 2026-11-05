@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEARNS v0.0013: The Long Run — ConsciousNode SoftWorks</title>
+<title>LEARNS v0.0014: Signal and Noise — ConsciousNode SoftWorks</title>
 <!--
-  LEARNS v0.0013 — THE LONG RUN
+  LEARNS v0.0014 — SIGNAL AND NOISE
   Logical Entropic Arrow Recursive Neuro-Symbolic Architecture
   ConsciousNode SoftWorks — November 2026
 
@@ -18,7 +18,32 @@
     6. Thermodynamic Loss         — from The Past Is Still The Future
 
   Authors: Kham Kizer · Kehai Interim (spec)
-  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009) · Kehai Interim (v0.0010, v0.0011, v0.0012, v0.0013)
+  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009) · Kehai Interim (v0.0010, v0.0011, v0.0012, v0.0013, v0.0014)
+
+  v0.0014 (Kehai Interim + Kham, Nov 4 2026) — SIGNAL AND NOISE.
+  Addresses the three audit findings from AUDIT-v0.0013.md (ternary checkpoint jitter of ~0.01-0.02 nats,
+  baseline seed-7 LayerNorm spike skewing paired deltas, and the head->stride contiguous-block vs book-start
+  question) and investigates why LEARNS trails a parameter-matched GRU by ~0.2 nats:
+  - TIER 1 MEASUREMENT PROTOCOL:
+    * Five seeds (3, 7, 11, 13, 17) for all comparisons.
+    * Checkpoint jitter band (--tail K, default 5) built into tests/run.js: evaluates full validation split at
+      the final K steps (10 steps apart) and records valTail, valTailMin, valTailMax, valTailMean, valTailRange.
+    * Script-generated paired statistics (tests/tables.js): computes means, per-seed values, paired Delta,
+      sample SD, and 95% Student-t confidence intervals (df = n - 1). A change is Help/Hurt only if the 95% CI
+      excludes 0 AND |mean Delta| exceeds max(meanTailRange_A, meanTailRange_B).
+    * Stable default baseline: fpNorm=rescale;fpInject=on (selected on 5-seed validation: mean val 2.2960 vs
+      2.3108 for fpInject=off, zero seed blowups). Legacy v0.0011/v0.0012 bit-identity is preserved under
+      explicit config fpNorm=layernorm;fpInject=off (--stream=head), verified by tests/repro-v0011.js.
+    * Optional EMA evaluation switch (ema=off|on, decay=0.99): cuts ternary tail jitter in half (0.0198 -> 0.0092)
+      but lags cosine decay by +0.020 nats at 1,000 steps, so ema=off remains default.
+  - TIER 3 & 4 ARCHITECTURAL FINDINGS (Why LEARNS Trails the GRU):
+    * Added --stream=block (one seeded random contiguous 9,600-byte block per seed) to separate contiguous
+      single-passage training from starting at byte 0 (corpus.txt has no Gutenberg header; narrative starts at byte 579).
+    * Tested LEARNS float32, dim=64 state scaling, per-layer helical state (helixState=shared|per_layer), and
+      arrow-of-time readout decoupling (scoutScale=0.5|0). Setting scoutScale=0 (keeping both R_A and R_B active
+      causally while stopping the reverse-chunk scout pass from injecting time-reversed bigram gradients into the
+      shared forward readout W_present/W_frontier) closes ~75% of the gap to the ternary GRU/Transformer.
+  - format: writes 0.0014; import reads 0.0005-0.0014.
 
   v0.0013 (Kehai Interim + Kham, Nov 4 2026) — THE LONG RUN.
   Fixes the v0.0012 data-coverage bottleneck (where 150 steps of sequential chunking read only the first
@@ -344,8 +369,8 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
 <body>
 
 <div id="header">
-  <h1>LEARNS v0.0013</h1>
-  <span class="sub">The Long Run — ConsciousNode SoftWorks</span>
+  <h1>LEARNS v0.0014</h1>
+  <span class="sub">Signal and Noise — ConsciousNode SoftWorks</span>
   <div id="token-pill" style="display:flex;align-items:center;gap:10px;font-size:11px;color:var(--text-dim);margin-left:10px;flex-wrap:wrap;">
     <span>CODE <b id="tc-codehash" style="color:var(--accent);">—</b></span>
     <span>CORPUS_H <b id="tc-corpushash" style="color:var(--accent);">—</b></span>
@@ -514,8 +539,9 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
       <div class="field">
         <label>Chunk stream (--stream)</label>
         <select class="num-input" id="cfg-stream">
-          <option value="stride" selected>stride — full-split seeded permutation (v0.0013)</option>
-          <option value="head">head — sequential from byte 0 (v0.0012)</option>
+          <option value="stride" selected>stride — full-split seeded permutation (default)</option>
+          <option value="block">block — one random contiguous block per seed (v0.0014)</option>
+          <option value="head">head — sequential from byte 0 (v0.0012 legacy)</option>
         </select>
       </div>
       <div class="field">
@@ -533,7 +559,7 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
       </div>
       <div class="field">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-          <input type="checkbox" id="cfg-fpinject" onchange="syncSwitchesFromLeft()" style="accent-color:var(--accent);width:13px;height:13px;">
+          <input type="checkbox" id="cfg-fpinject" checked onchange="syncSwitchesFromLeft()" style="accent-color:var(--accent);width:13px;height:13px;">
           <span style="font-size:11px;color:var(--text-dim);">FP input injection — K_A = F(K_B, a_t)</span>
         </label>
       </div>
@@ -760,20 +786,20 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
             </select>
           </div>
           <div class="sw-item">
-            <label>fpInject <span>Default: off</span></label>
+            <label>fpInject <span>Default: on (v0.0014)</span></label>
             <div class="sw-desc">DEQ-style input injection K_A = F_A(K_B, a_t), K_B = F_B(K_A, b_t).</div>
             <select class="num-input" id="sw-fpInject" onchange="syncSwitchesFromBoard()">
-              <option value="off" selected>off — pure autonomous map (default)</option>
-              <option value="on">on — inject a_t, b_t each iteration</option>
+              <option value="on" selected>on — inject a_t, b_t each iteration (default)</option>
+              <option value="off">off — autonomous map (v0.0011 legacy)</option>
             </select>
           </div>
           <div class="sw-item">
-            <label>fpNorm <span>Default: layernorm</span></label>
-            <div class="sw-desc">Jacobi normalization: layernorm (re-inflates) vs none/rescale (contractive, σ(W_F)≤0.9).</div>
+            <label>fpNorm <span>Default: rescale (v0.0014)</span></label>
+            <div class="sw-desc">Jacobi normalization: rescale/none (contractive, σ(W_F)≤0.9) vs layernorm (v0.0011 legacy).</div>
             <select class="num-input" id="sw-fpNorm" onchange="syncSwitchesFromBoard()">
-              <option value="layernorm" selected>layernorm — standard LN (default)</option>
+              <option value="rescale" selected>rescale — centered unit-ball contractive (default)</option>
               <option value="none">none — no LN, contractive W_FA/W_FB</option>
-              <option value="rescale">rescale — centered unit-ball contractive</option>
+              <option value="layernorm">layernorm — standard LN (v0.0011 legacy)</option>
             </select>
           </div>
         </div>
@@ -805,6 +831,14 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
               <option value="causal" selected>causal — carry forward (default)</option>
               <option value="prevrev">prevrev — seed from reversed prev chunk</option>
               <option value="legacy">legacy — future scout (leaks target)</option>
+            </select>
+          </div>
+          <div class="sw-item">
+            <label>scoutScale <span>Default: 0.5</span></label>
+            <div class="sw-desc">Reverse-chunk auxiliary gradient weight (0 = keep causal R_B without reverse readout grads).</div>
+            <select class="num-input" id="sw-scoutScale" onchange="syncSwitchesFromBoard()">
+              <option value="0.5" selected>0.5 — reverse scout gradients active (default)</option>
+              <option value="0">0 — causal R_B only, no reverse readout grads</option>
             </select>
           </div>
           <div class="sw-item">
@@ -852,6 +886,14 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
               <option value="learned" selected>learned — trainable σ(ρ) (default)</option>
               <option value="fixed">fixed — constant σ(2.2) ≈ 0.90</option>
               <option value="none">none — integrate everything (σ = 1)</option>
+            </select>
+          </div>
+          <div class="sw-item">
+            <label>helixState <span>Default: shared</span></label>
+            <div class="sw-desc">Shared d-dim helical state vs independent per-layer spirals hs[l] (L×d state floats).</div>
+            <select class="num-input" id="sw-helixState" onchange="syncSwitchesFromBoard()">
+              <option value="shared" selected>shared — single d-dim spiral across layers (default)</option>
+              <option value="per_layer">per_layer — independent spiral per layer (2× state)</option>
             </select>
           </div>
         </div>
@@ -902,6 +944,14 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
             <select class="num-input" id="sw-phiClip" onchange="syncSwitchesFromBoard()">
               <option value="on" selected>on — φ-asymmetric clamp (default)</option>
               <option value="off">off — symmetric ±1 clamp</option>
+            </select>
+          </div>
+          <div class="sw-item">
+            <label>ema <span>Default: off</span></label>
+            <div class="sw-desc">Evaluate exponential moving average (β=0.99) of float shadow weights quantized at eval time.</div>
+            <select class="num-input" id="sw-ema" onchange="syncSwitchesFromBoard()">
+              <option value="off" selected>off — evaluate live weights (default)</option>
+              <option value="on">on — evaluate EMA shadow weights (β=0.99)</option>
             </select>
           </div>
         </div>
@@ -1012,8 +1062,11 @@ const DEFAULT_SWITCHES = {
   innerFP: 4,              // 2..8
   fpIters: 6,              // 0 | 1 | 2 | 6 | 12
   fpEps: 1e-4,             // 1e-3 | 1e-4 | 1e-5
-  fpInject: 'off',         // off | on
-  fpNorm: 'layernorm',     // layernorm | none | rescale
+  fpInject: 'on',          // on | off (v0.0014 validation-selected default with fpNorm=rescale)
+  fpNorm: 'rescale',       // rescale | layernorm | none (v0.0014 stable default: rescale)
+  helixState: 'shared',    // shared | per_layer
+  scoutScale: 0.5,         // 0.5 | 0
+  ema: 'off',              // off | on
   recordA: 'on',           // on | off
   recordB: 'on',           // on | off
   rbMode: 'causal',        // causal | prevrev | legacy
@@ -1033,9 +1086,9 @@ const DEFAULT_SWITCHES = {
 const SWITCH_KEYS_ORDER = [
   'arch','dim','layers','chunk','lr','weights',
   'relEmbed','coreA','coreB','innerFP','fpIters','fpInject','fpNorm',
-  'recordA','recordB','rbMode','frontierPresent','frontierHelix',
-  'helix','helixRotation','helixRetention','thermo','lambda',
-  'clipMode','phiClip'
+  'recordA','recordB','rbMode','scoutScale','frontierPresent','frontierHelix',
+  'helix','helixRotation','helixRetention','helixState','thermo','lambda',
+  'clipMode','phiClip','ema'
 ];
 
 function _normOnOff(v, defVal) {
@@ -1071,8 +1124,11 @@ function normalizeConfig(raw = {}) {
   c.relEmbed = _normOnOff(c.relEmbed, 'on');
   c.coreA = _normOnOff(c.coreA, 'on');
   c.coreB = _normOnOff(c.coreB, 'on');
-  c.fpInject = _normOnOff(c.fpInject, 'off');
-  c.fpNorm = String(c.fpNorm || 'layernorm').toLowerCase();
+  c.fpInject = _normOnOff(c.fpInject, 'on');
+  c.fpNorm = String(c.fpNorm || 'rescale').toLowerCase();
+  c.helixState = String(c.helixState || 'shared').toLowerCase();
+  c.scoutScale = c.scoutScale !== undefined ? Number(c.scoutScale) : 0.5;
+  c.ema = _normOnOff(c.ema, 'off');
   c.recordA = _normOnOff(c.recordA, 'on');
   c.recordB = _normOnOff(c.recordB, 'on');
   c.frontierPresent = _normOnOff(c.frontierPresent, 'on');
@@ -1100,7 +1156,7 @@ function parseConfig(input, base = {}) {
   if (s.startsWith('{')) {
     try { return normalizeConfig(Object.assign({}, base, JSON.parse(s))); } catch (e) {}
   }
-  if (s.startsWith('L12:') || s.startsWith('L13:')) s = s.slice(4);
+  if (s.startsWith('L12:') || s.startsWith('L13:') || s.startsWith('L14:')) s = s.slice(4);
   const out = Object.assign({}, base);
   const parts = s.split(/[;,]+/);
   for (const part of parts) {
@@ -1491,6 +1547,28 @@ function matvecTernaryT(W, g, rows, cols) {
   }
   return out;
 }
+function matvecInto(W, x, rows, cols, y) {
+  const cols4 = cols - 3;
+  for (let i = 0; i < rows; i++) {
+    let s = 0, base = i * cols, j = 0;
+    for (; j < cols4; j += 4) {
+      s += W[base + j] * x[j] + W[base + j + 1] * x[j + 1] + W[base + j + 2] * x[j + 2] + W[base + j + 3] * x[j + 3];
+    }
+    for (; j < cols; j++) s += W[base + j] * x[j];
+    y[i] = s;
+  }
+}
+function matvecTernaryInto(W, x, rows, cols, y) {
+  if (!LEARNS_TERNARY) { matvecInto(W, x, rows, cols, y); return; }
+  const c = (W._qcache && W._qcache.ver === LEARNS_QVER && W._qcache.rows === rows) ? W._qcache : ternaryQ(W, rows, cols);
+  const { scale, posIdx, negIdx, rowPosStart, rowNegStart } = c;
+  for (let i = 0; i < rows; i++) {
+    let s = 0;
+    for (let p = rowPosStart[i], p1 = rowPosStart[i + 1]; p < p1; p++) s += x[posIdx[p]];
+    for (let n = rowNegStart[i], n1 = rowNegStart[i + 1]; n < n1; n++) s -= x[negIdx[n]];
+    y[i] = s * scale;
+  }
+}
 function dot(a, b) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
 function entropyGradR(R) {
   const p = softmax(R), H = entropy(p), g = new Float32Array(R.length);
@@ -1838,7 +1916,9 @@ class LEARNSModel {
   }
 
   getEmptyState() {
-    return { h: zeros(this.dim), R_A: zeros(this.dim), R_B: zeros(this.dim), tokenHistory: [] };
+    const hs = [];
+    for (let l = 0; l < this.numLayers; l++) hs.push(zeros(this.dim));
+    return { h: zeros(this.dim), hs, R_A: zeros(this.dim), R_B: zeros(this.dim), tokenHistory: [] };
   }
 
   _suffixSig(tokenHistory) {
@@ -1857,7 +1937,265 @@ class LEARNSModel {
     return sig;
   }
 
+  _forwardEval(tokenId, state, cfg) {
+    const { dim, numLayers, vocab } = this;
+    const prevTernary = LEARNS_TERNARY;
+    if (cfg.weights === 'float32') LEARNS_TERNARY = false;
+    else if (cfg.weights === 'ternary') LEARNS_TERNARY = true;
+
+    if (!this._ev || this._ev.dim !== dim || this._ev.numLayers !== numLayers) {
+      this._ev = {
+        dim, numLayers,
+        e: new Float32Array(dim),
+        R_comb_prev: new Float32Array(dim),
+        R_comb_new: new Float32Array(dim),
+        sfx: new Float32Array(dim),
+        inp2: new Float32Array(2 * dim),
+        inp3: new Float32Array(3 * dim),
+        K0: new Float32Array(dim),
+        K1: new Float32Array(dim),
+        a_t: new Float32Array(dim),
+        b_t: new Float32Array(dim),
+        gA: new Float32Array(dim),
+        gB: new Float32Array(dim),
+        KA0: new Float32Array(dim),
+        KB0: new Float32Array(dim),
+        KA1: new Float32Array(dim),
+        KB1: new Float32Array(dim),
+        h: new Float32Array(dim),
+        h_in: new Float32Array(dim),
+        h_rot: new Float32Array(dim),
+        px_t: new Float32Array(dim),
+        P: new Float32Array(dim),
+        tmpD1: new Float32Array(dim),
+        tmpD2: new Float32Array(dim),
+        logits: new Float32Array(vocab),
+        lp: new Float32Array(vocab),
+        diag: { fpItersAvg: 0, fpAgreeAvg: 0, fpResidualAvg: 0, aSymItersAvg: 0, rAEntropy: 0, rBEntropy: 0, fEntropy: 0, aAct: 0, bAct: 0, dSA: 0, dSB: 0 }
+      };
+    }
+    const ev = this._ev;
+    const relOn = cfg.relEmbed !== 'off' && cfg.relEmbed !== false;
+    const coreAOn = cfg.coreA !== 'off' && cfg.coreA !== false;
+    const coreBOn = cfg.coreB !== 'off' && cfg.coreB !== false;
+    const maxFPIter = cfg.fpIters !== undefined ? Number(cfg.fpIters) : (cfg.maxFPIter !== undefined ? Number(cfg.maxFPIter) : 6);
+    const innerFPMax = cfg.innerFP !== undefined ? Number(cfg.innerFP) : (cfg.innerFPMax !== undefined ? Number(cfg.innerFPMax) : 4);
+    const fpEps = cfg.fpEps !== undefined ? Number(cfg.fpEps) : 1e-4;
+    const inject = cfg.fpInject === 'on' || cfg.fpInject === true;
+    const fpNorm = String(cfg.fpNorm || 'layernorm').toLowerCase();
+    const recAOn = cfg.recordA !== 'off' && cfg.recordA !== false;
+    const recBOn = cfg.recordB !== 'off' && cfg.recordB !== false;
+    const presentOn = cfg.frontierPresent !== undefined ? (cfg.frontierPresent !== 'off' && cfg.frontierPresent !== false) : true;
+    const frontierHelixOn = cfg.frontierHelix !== 'off' && cfg.frontierHelix !== false;
+    const helixOn = cfg.helix !== 'off' && cfg.helix !== false;
+    const helixRotMode = cfg.helixRotation || 'learned';
+    const helixRetMode = cfg.helixRetention || 'learned';
+    const perLayerH = (cfg.helixState || 'shared') === 'per_layer';
+
+    const R_A = state.R_A, R_B = state.R_B, tokenHistory = state.tokenHistory;
+    const R_comb_prev = ev.R_comb_prev;
+    for (let j = 0; j < dim; j++) R_comb_prev[j] = 0.5 * ((recAOn ? R_A[j] : 0) + (recBOn ? R_B[j] : 0));
+
+    const e = ev.e;
+    const embBase = tokenId * dim;
+    if (relOn && (recAOn || recBOn)) {
+      matvecTernaryInto(this.W_rel, R_comb_prev, dim, dim, e);
+      for (let j = 0; j < dim; j++) e[j] += this.W_embed[embBase + j];
+    } else {
+      for (let j = 0; j < dim; j++) e[j] = this.W_embed[embBase + j];
+    }
+
+    const sfx = ev.sfx;
+    sfx.fill(0);
+    if (coreAOn) {
+      const n = Math.min(tokenHistory.length, this.K_hist);
+      if (n > 0) {
+        for (let k = 0; k < n; k++) {
+          const w = (k + 1) / n;
+          const base = tokenHistory[tokenHistory.length - n + k] * dim;
+          for (let j = 0; j < dim; j++) sfx[j] += w * this.W_embed[base + j];
+        }
+        const invN = 1 / n;
+        for (let j = 0; j < dim; j++) sfx[j] *= invN;
+      }
+    }
+
+    const h = ev.h, h_in = ev.h_in;
+    if (helixOn && !perLayerH) h.set(state.h); else h.fill(0);
+    let totalFPIters = 0, totalFPRes = 0;
+
+    for (let l = 0; l < numLayers; l++) {
+      const h_layer_prev = perLayerH ? (helixOn && state.hs && state.hs[l] ? state.hs[l] : ev.tmpD1.fill(0)) : h;
+      if (perLayerH) {
+        if (l === 0) h_in.set(h_layer_prev);
+        else for (let j = 0; j < dim; j++) h_in[j] = h_layer_prev[j] + h[j];
+      } else {
+        h_in.set(h);
+      }
+
+      const a_t = ev.a_t;
+      if (coreAOn) {
+        let K = ev.K0, Kn = ev.K1;
+        K.fill(0);
+        const inp2 = ev.inp2;
+        inp2.set(sfx, dim);
+        const W_A = this.layers_W_A[l], gAsym = this.layers_ln_fpAsym_gamma[l], bAsym = this.layers_ln_fpAsym_beta[l];
+        for (let i = 0; i < innerFPMax; i++) {
+          inp2.set(K, 0);
+          matvecTernaryInto(W_A, inp2, dim, 2 * dim, Kn);
+          for (let j = 0; j < dim; j++) Kn[j] = Math.tanh(Kn[j]);
+          layerNorm(Kn, gAsym, bAsym, 1e-5, true);
+          let dSq = 0;
+          for (let j = 0; j < dim; j++) { const df = Kn[j] - K[j]; dSq += df * df; }
+          const tmp = K; K = Kn; Kn = tmp;
+          if (Math.sqrt(dSq) < fpEps) break;
+        }
+        a_t.set(K);
+      } else {
+        a_t.fill(0);
+      }
+
+      const b_t = ev.b_t;
+      if (coreBOn) {
+        const inp2 = ev.inp2;
+        inp2.set(h_in, 0); inp2.set(R_comb_prev, dim);
+        matvecTernaryInto(this.layers_W_B[l], inp2, dim, 2 * dim, b_t);
+        for (let j = 0; j < dim; j++) b_t[j] = Math.tanh(b_t[j]);
+      } else {
+        b_t.fill(0);
+      }
+
+      let K_A = ev.KA0, K_B = ev.KB0, KA = ev.KA1, KB = ev.KB1;
+      if (coreAOn && coreBOn) {
+        matvecTernaryInto(this.layers_W_gA[l], b_t, dim, dim, ev.gA);
+        matvecTernaryInto(this.layers_W_gB[l], a_t, dim, dim, ev.gB);
+        for (let j = 0; j < dim; j++) {
+          K_A[j] = (1 / (1 + Math.exp(-ev.gA[j]))) * a_t[j];
+          K_B[j] = (1 / (1 + Math.exp(-ev.gB[j]))) * b_t[j];
+        }
+      } else {
+        K_A.set(a_t); K_B.set(b_t);
+      }
+
+      const W_FA = this.layers_W_FA[l], W_FB = this.layers_W_FB[l];
+      const gFA = this.layers_ln_fpA_gamma[l], bFA = this.layers_ln_fpA_beta[l];
+      const gFB = this.layers_ln_fpB_gamma[l], bFB = this.layers_ln_fpB_beta[l];
+      let lastRes = 0, fpIt = 0;
+      for (let i = 0; i < maxFPIter; i++) {
+        matvecInto(W_FA, K_B, dim, dim, KA);
+        matvecInto(W_FB, K_A, dim, dim, KB);
+        if (inject) {
+          for (let j = 0; j < dim; j++) { KA[j] = Math.tanh(KA[j] + a_t[j]); KB[j] = Math.tanh(KB[j] + b_t[j]); }
+        } else {
+          for (let j = 0; j < dim; j++) { KA[j] = Math.tanh(KA[j]); KB[j] = Math.tanh(KB[j]); }
+        }
+        if (fpNorm === 'rescale') {
+          rescaleNorm(KA, gFA, bFA, true);
+          rescaleNorm(KB, gFB, bFB, true);
+        } else if (fpNorm !== 'none') {
+          layerNorm(KA, gFA, bFA, 1e-5, true);
+          layerNorm(KB, gFB, bFB, 1e-5, true);
+        }
+        fpIt++;
+        let dASq = 0, dBSq = 0;
+        for (let j = 0; j < dim; j++) {
+          const da = KA[j] - K_A[j], db = KB[j] - K_B[j];
+          dASq += da * da; dBSq += db * db;
+        }
+        const dA = Math.sqrt(dASq), dB = Math.sqrt(dBSq);
+        lastRes = 0.5 * (dA + dB);
+        const tA = K_A; K_A = KA; KA = tA;
+        const tB = K_B; K_B = KB; KB = tB;
+        if (dA < fpEps && dB < fpEps) break;
+      }
+      ev.KA0 = K_A; ev.KB0 = K_B; ev.KA1 = KA; ev.KB1 = KB;
+      totalFPIters += fpIt; totalFPRes += lastRes;
+
+      const h_rot = ev.h_rot;
+      if (!helixOn) {
+        h_rot.fill(0);
+      } else if (helixRotMode === 'none') {
+        h_rot.set(h_layer_prev);
+      } else {
+        const thetas = this.layers_thetas[l];
+        for (let i = 0; i < thetas.length; i++) {
+          const a = 2 * i, b = 2 * i + 1;
+          const c = Math.cos(thetas[i]), s = Math.sin(thetas[i]);
+          h_rot[a] = c * h_layer_prev[a] - s * h_layer_prev[b];
+          h_rot[b] = s * h_layer_prev[a] + c * h_layer_prev[b];
+        }
+      }
+
+      const inp3 = ev.inp3;
+      inp3.set(h_in, 0);
+      for (let j = 0; j < dim; j++) inp3[dim + j] = 0.5 * (K_A[j] + K_B[j]);
+      inp3.set(e, 2 * dim);
+      matvecTernaryInto(this.layers_W_px[l], inp3, dim, 3 * dim, ev.px_t);
+      for (let j = 0; j < dim; j++) ev.px_t[j] = Math.tanh(ev.px_t[j]);
+      matvecTernaryInto(this.layers_W_prog[l], ev.px_t, dim, dim, ev.P);
+
+      const rho = this.layers_rho[l], P = ev.P;
+      if (!helixOn) {
+        h.set(P);
+      } else if (helixRetMode === 'none') {
+        for (let j = 0; j < dim; j++) h[j] = h_rot[j] + P[j];
+      } else if (helixRetMode === 'fixed') {
+        const fixedRet = 1 / (1 + Math.exp(-2.2));
+        for (let j = 0; j < dim; j++) h[j] = fixedRet * h_rot[j] + P[j];
+      } else {
+        for (let j = 0; j < dim; j++) h[j] = (1 / (1 + Math.exp(-rho[j]))) * h_rot[j] + P[j];
+      }
+      if (perLayerH && state.hs && state.hs[l]) {
+        if (helixOn) state.hs[l].set(h); else state.hs[l].fill(0);
+      }
+    }
+
+    const K_A_final = ev.KA0, K_B_final = ev.KB0;
+    const Ka = ev.tmpD1, cx = ev.tmpD2;
+    if (recAOn) {
+      matvecTernaryInto(this.W_rec_A, K_A_final, dim, dim, Ka);
+      if (recBOn) matvecTernaryInto(this.W_cross_A, R_B, dim, dim, cx); else cx.fill(0);
+      for (let j = 0; j < dim; j++) Ka[j] = R_A[j] + Ka[j] + cx[j];
+      layerNorm(Ka, this.ln_recA_gamma, this.ln_recA_beta, 1e-5, true);
+    } else {
+      Ka.fill(0);
+    }
+    if (recBOn) {
+      matvecTernaryInto(this.W_rec_B, K_B_final, dim, dim, ev.a_t);
+      if (recAOn) matvecTernaryInto(this.W_cross_B, R_A, dim, dim, cx); else cx.fill(0);
+      for (let j = 0; j < dim; j++) R_B[j] = R_B[j] + ev.a_t[j] + cx[j];
+      layerNorm(R_B, this.ln_recB_gamma, this.ln_recB_beta, 1e-5, true);
+    } else {
+      R_B.fill(0);
+    }
+    R_A.set(Ka);
+    if (helixOn) state.h.set(h); else state.h.fill(0);
+
+    const R_comb_new = ev.R_comb_new;
+    for (let j = 0; j < dim; j++) R_comb_new[j] = 0.5 * (R_A[j] + R_B[j]);
+    const logits = ev.logits;
+    if (recAOn || recBOn) {
+      matvecTernaryInto(this.W_frontier, R_comb_new, vocab, dim, logits);
+    } else {
+      logits.fill(0);
+    }
+    if (presentOn) {
+      const h_f = frontierHelixOn ? h : ev.P;
+      matvecTernaryInto(this.W_present, h_f, vocab, dim, ev.lp);
+      for (let i = 0; i < vocab; i++) logits[i] += ev.lp[i];
+    }
+
+    tokenHistory.push(tokenId);
+    if (tokenHistory.length > this.K_hist) tokenHistory.shift();
+
+    ev.diag.fpItersAvg = totalFPIters / numLayers;
+    ev.diag.fpResidualAvg = totalFPRes / numLayers;
+    LEARNS_TERNARY = prevTernary;
+    return { logits, state, caches: null, diagnostics: ev.diag };
+  }
+
   forward(tokenId, state, cfg = {}) {
+    if (cfg.evalOnly) return this._forwardEval(tokenId, state, cfg);
     const { dim, numLayers } = this;
     const prevTernary = LEARNS_TERNARY;
     if (cfg.weights === 'float32') LEARNS_TERNARY = false;
@@ -1878,14 +2216,16 @@ class LEARNSModel {
     const helixOn = cfg.helix !== 'off' && cfg.helix !== false;
     const helixRotMode = cfg.helixRotation || 'learned';
     const helixRetMode = cfg.helixRetention || 'learned';
+    const perLayerH = (cfg.helixState || 'shared') === 'per_layer';
 
     const h_prev = helixOn ? state.h : zeros(dim);
+    const hs_prev = (perLayerH && state.hs) ? state.hs : null;
     const R_A_prev = recAOn ? state.R_A : zeros(dim);
     const R_B_prev = recBOn ? state.R_B : zeros(dim);
     const { tokenHistory } = state;
 
     const caches = {
-      layers: [], tokenId, inject, fpNorm,
+      layers: [], tokenId, inject, fpNorm, perLayerH,
       relOn, coreAOn, coreBOn, maxFPIter, innerFPMax, recAOn, recBOn,
       present: presentOn, frontierHelixOn, helixOn, helixRotMode, helixRetMode,
       useTernary: LEARNS_TERNARY
@@ -1906,10 +2246,13 @@ class LEARNSModel {
     caches.suffix_sig = suffix_sig; caches.suffix_hist = tokenHistory.slice();
 
     let h = h_prev.slice(), K_A_final = null, K_B_final = null;
+    const hs_new = perLayerH ? [] : null;
     let totalFPIters = 0, totalFPAgree = 0, totalFPRes = 0, totalASymIters = 0, a_act_sum = 0, b_act_sum = 0, act_count = 0;
 
     for (let l = 0; l < numLayers; l++) {
-      const lc = { h_prev: h.slice() };
+      const h_layer_prev = perLayerH ? ((helixOn && hs_prev && hs_prev[l]) ? hs_prev[l].slice() : zeros(dim)) : h.slice();
+      const h_in = perLayerH ? (l === 0 ? h_layer_prev.slice() : vecadd(h_layer_prev, h)) : h;
+      const lc = { h_prev: h_layer_prev };
       // (2) TEMPORAL TURING CORE
       let a_t, innerSteps = [], aSymIters = 0;
       if (coreAOn) {
@@ -1920,7 +2263,7 @@ class LEARNSModel {
       }
       lc.a_t = a_t; lc.innerSteps = innerSteps; lc.aSymIters = aSymIters; totalASymIters += aSymIters;
 
-      const b_input = concat2(h, R_combined_prev);
+      const b_input = concat2(h_in, R_combined_prev);
       const b_t = coreBOn ? tanh_v(matvecTernary(this.layers_W_B[l], b_input, dim, 2 * dim)) : zeros(dim);
       lc.b_input = b_input; lc.b_t = b_t;
 
@@ -1948,10 +2291,10 @@ class LEARNSModel {
       K_A_final = K_A; K_B_final = K_B;
 
       // (5) HELICAL STATE
-      const h_rotated = (!helixOn) ? zeros(dim) : (helixRotMode === 'none' ? h.slice() : givensRotate(h, this.layers_thetas[l]));
+      const h_rotated = (!helixOn) ? zeros(dim) : (helixRotMode === 'none' ? h_layer_prev.slice() : givensRotate(h_layer_prev, this.layers_thetas[l]));
       const K_combined = new Float32Array(dim);
       for (let j = 0; j < dim; j++) K_combined[j] = 0.5 * (K_A[j] + K_B[j]);
-      const px_input = concat3(h, K_combined, e);
+      const px_input = concat3(h_in, K_combined, e);
       const px_tanh = tanh_v(matvecTernary(this.layers_W_px[l], px_input, dim, 3 * dim));
       const P = matvecTernary(this.layers_W_prog[l], px_tanh, dim, dim);
       const ret = new Float32Array(dim), rho = this.layers_rho[l];
@@ -1967,6 +2310,7 @@ class LEARNSModel {
       }
       h = new Float32Array(dim);
       for (let j = 0; j < dim; j++) h[j] = ret[j] * h_rotated[j] + P[j];
+      if (perLayerH) hs_new.push(helixOn ? h : zeros(dim));
       lc.h_rotated = h_rotated; lc.ret = ret; lc.P = P;
       lc.px_input = px_input; lc.px_tanh = px_tanh;
       caches.layers.push(lc);
@@ -2025,7 +2369,7 @@ class LEARNSModel {
     LEARNS_TERNARY = prevTernary;
     return {
       logits,
-      state: { h: helixOn ? h : zeros(dim), R_A: R_A_new, R_B: R_B_new, tokenHistory: newHistory },
+      state: { h: helixOn ? h : zeros(dim), hs: hs_new, R_A: R_A_new, R_B: R_B_new, tokenHistory: newHistory },
       caches,
       diagnostics: {
         fpItersAvg: caches.fpItersAvg, fpAgreeAvg: caches.fpAgreeAvg, fpResidualAvg: caches.fpResidualAvg,
@@ -2089,7 +2433,9 @@ class LEARNSModel {
     }
 
     // LAYERS
-    let grad_h = (helixOn && gradStateIn && gradStateIn.h) ? gradStateIn.h.slice() : zeros(dim);
+    const perLayerH = !!caches.perLayerH;
+    const grad_hs_prev = perLayerH ? Array.from({ length: numLayers }, () => zeros(dim)) : null;
+    let grad_h = (helixOn && !perLayerH && gradStateIn && gradStateIn.h) ? gradStateIn.h.slice() : zeros(dim);
     let grad_P_top_extra = null;
     if (present && grad_logits) {
       outer(this.W_present_grad, caches.h_frontier, grad_logits, vocab, dim);
@@ -2103,6 +2449,10 @@ class LEARNSModel {
     const grad_e = zeros(dim), grad_sfx = zeros(dim), grad_Rc_prev = zeros(dim);
 
     for (let l = numLayers - 1; l >= 0; l--) {
+      const inHS = gradStateIn && (gradStateIn.hs || (gradStateIn.h && gradStateIn.h.hs));
+      if (perLayerH && helixOn && inHS && inHS[l]) {
+        acc(grad_h, inHS[l]);
+      }
       const lc = caches.layers[l];
       const g_rot = new Float32Array(dim), g_rho = this.layers_rho_grad[l];
       if (helixOn) {
@@ -2113,16 +2463,17 @@ class LEARNSModel {
           }
         }
       }
-      let g_h;
+      let g_h_rot_prev;
       if (!helixOn) {
-        g_h = zeros(dim);
+        g_h_rot_prev = zeros(dim);
       } else if (helixRotMode === 'none') {
-        g_h = g_rot.slice();
+        g_h_rot_prev = g_rot.slice();
       } else {
         const giv = givensRotateBackward(lc.h_prev, this.layers_thetas[l], g_rot);
         acc(this.layers_thetas_grad[l], giv.grad_theta);
-        g_h = giv.grad_h;
+        g_h_rot_prev = giv.grad_h;
       }
+      let g_h = perLayerH ? zeros(dim) : g_h_rot_prev;
 
       const grad_P = grad_h.slice();
       if (l === numLayers - 1 && grad_P_top_extra) acc(grad_P, grad_P_top_extra);
@@ -2212,7 +2563,12 @@ class LEARNSModel {
           for (let j = 0; j < dim; j++) grad_sfx[j] += gin[dim + j];
         }
       }
-      grad_h = g_h;
+      if (perLayerH) {
+        for (let j = 0; j < dim; j++) grad_hs_prev[l][j] = helixOn ? (g_h_rot_prev[j] + g_h[j]) : 0;
+        grad_h = l > 0 ? g_h : grad_hs_prev[0];
+      } else {
+        grad_h = g_h;
+      }
     }
 
     // RELATIONAL EMBEDDING
@@ -2234,7 +2590,9 @@ class LEARNSModel {
     }
 
     LEARNS_TERNARY = prevTernary;
-    return { grad_R_A_prev, grad_R_B_prev, grad_h: helixOn ? grad_h : zeros(dim) };
+    const outH = helixOn ? grad_h : zeros(dim);
+    if (perLayerH) outH.hs = grad_hs_prev;
+    return { grad_R_A_prev, grad_R_B_prev, grad_h: outH, hs: grad_hs_prev };
   }
 
   zeroGrads() {
@@ -2418,23 +2776,24 @@ class GRUModel {
         h_new[j] = (1 - z[j]) * h_prev[j] + z[j] * h_cand[j];
         a_act_sum += z[j]; b_act_sum += r[j];
       }
-      layerCaches.push({ x: x.slice(), h_prev: h_prev.slice(), xh, z, r, xrh, h_cand });
+      if (!cfg.evalOnly) layerCaches.push({ x: x.slice(), h_prev: h_prev.slice(), xh, z, r, xrh, h_cand });
       hs_new.push(h_new);
       x = h_new;
     }
     const logits = matvecTernary(this.W_out, x, this.vocab, H);
     for (let i = 0; i < this.vocab; i++) logits[i] += this.b_out[i];
-    const hEnt = recordEntropy(x);
+    const hEnt = cfg.evalOnly ? 0 : recordEntropy(x);
+    const fEnt = cfg.evalOnly ? 0 : entropy(softmax(logits));
     const useTernary = LEARNS_TERNARY;
     LEARNS_TERNARY = prevTernary;
 
     return {
       logits,
       state: { hs: hs_new, h: x, R_A: x, R_B: x, tokenHistory: [] },
-      caches: { tokenId, layerCaches, h_top: x, useTernary },
+      caches: cfg.evalOnly ? null : { tokenId, layerCaches, h_top: x, useTernary },
       diagnostics: {
         fpItersAvg: 0, fpAgreeAvg: 0, fpResidualAvg: 0, aSymItersAvg: 0,
-        rAEntropy: hEnt, rBEntropy: hEnt, fEntropy: entropy(softmax(logits)),
+        rAEntropy: hEnt, rBEntropy: hEnt, fEntropy: fEnt,
         aAct: a_act_sum / (L * H), bAct: b_act_sum / (L * H), dSA: 0, dSB: 0
       }
     };
@@ -3104,6 +3463,36 @@ function clipGradNorm(grads, maxNorm) {
   return totalNorm;
 }
 
+function getModelParamArrays(m) {
+  if (!m) return [];
+  if (m._paramArrays) return m._paramArrays;
+  const arrs = [];
+  for (const k of Object.keys(m)) {
+    if (/_grad$|_m1$|_m2$|^cfg$|^rope|^_/.test(k)) continue;
+    const v = m[k];
+    if (v && v.BYTES_PER_ELEMENT) arrs.push(v);
+    else if (Array.isArray(v)) {
+      for (const x of v) if (x && x.BYTES_PER_ELEMENT) arrs.push(x);
+    }
+  }
+  m._paramArrays = arrs;
+  return arrs;
+}
+
+function updateModelEMA(model, decay = 0.99) {
+  const arrs = getModelParamArrays(model);
+  if (!model._emaArrays || model._emaArrays.length !== arrs.length) {
+    model._emaArrays = arrs.map(a => a.slice());
+    return;
+  }
+  const oneMinusD = 1 - decay;
+  const ema = model._emaArrays;
+  for (let i = 0; i < arrs.length; i++) {
+    const p = arrs[i], e = ema[i];
+    for (let j = 0; j < p.length; j++) e[j] = decay * e[j] + oneMinusD * p[j];
+  }
+}
+
 function optimizerStep(model, step, lr, cfg = {}) {
   if (!model || model.arch === 'ngram') return;
   invalidateTernaryCache();
@@ -3135,6 +3524,7 @@ function optimizerStep(model, step, lr, cfg = {}) {
       adamwStep(model.layers_W_h[l], model.layers_W_h_grad[l], model.layers_W_h_m1[l], model.layers_W_h_m2[l], step, lr);
       adamwStep(model.layers_b_h[l], model.layers_b_h_grad[l], model.layers_b_h_m1[l], model.layers_b_h_m2[l], step, lr, 0.9, 0.999, 1e-8, 0);
     }
+    if ((cfg.ema || (model.cfg && model.cfg.ema)) === 'on') updateModelEMA(model, cfg.emaDecay || 0.99);
     invalidateTernaryCache();
     return;
   }
@@ -3171,6 +3561,7 @@ function optimizerStep(model, step, lr, cfg = {}) {
       adamwStep(model.layers_W_ff1[l], model.layers_W_ff1_grad[l], model.layers_W_ff1_m1[l], model.layers_W_ff1_m2[l], step, lr);
       adamwStep(model.layers_W_ff2[l], model.layers_W_ff2_grad[l], model.layers_W_ff2_m1[l], model.layers_W_ff2_m2[l], step, lr);
     }
+    if ((cfg.ema || (model.cfg && model.cfg.ema)) === 'on') updateModelEMA(model, cfg.emaDecay || 0.99);
     invalidateTernaryCache();
     return;
   }
@@ -3263,6 +3654,7 @@ function optimizerStep(model, step, lr, cfg = {}) {
       }
     }
   }
+  if ((cfg.ema || (model.cfg && model.cfg.ema)) === 'on') updateModelEMA(model, cfg.emaDecay || 0.99);
   invalidateTernaryCache();
 }
 
@@ -3396,7 +3788,10 @@ async function trainChunk(tokens, chunkCfg) {
   const recBOn = cfg.recordB !== 'off' && cfg.recordB !== false;
 
   // ── BACKWARD SCOUT ─────────────────────────────────────────────────────
-  const { R_B_at: R_B_future, scoutCaches, scoutLogits, scoutTargets } = recBOn
+  const scoutScaleVal = cfg.scoutScale !== undefined ? Number(cfg.scoutScale) : 0.5;
+  const rbMode = cfg.rbMode || 'causal';
+  const needScout = recBOn && (scoutScaleVal > 0 || rbMode === 'prevrev' || rbMode === 'legacy');
+  const { R_B_at: R_B_future, scoutCaches, scoutLogits, scoutTargets } = needScout
     ? scoutBackwardPass(tokens, model, cfg)
     : { R_B_at: Array.from({ length: len + 1 }, () => zeros(model.dim)), scoutCaches: [], scoutLogits: [], scoutTargets: [] };
 
@@ -3404,10 +3799,9 @@ async function trainChunk(tokens, chunkCfg) {
   const allCaches = [];
   const allDiag = [];
   let state = App.trainState || model.getEmptyState();
-  const rbMode = cfg.rbMode || 'causal';
   const legacy = rbMode === 'legacy';
   if (rbMode === 'prevrev' && cfg.contiguous && App.prevScoutRB && recBOn) {
-    state = { h: state.h, R_A: state.R_A, R_B: App.prevScoutRB.slice(), tokenHistory: state.tokenHistory };
+    state = { h: state.h, hs: state.hs, R_A: state.R_A, R_B: App.prevScoutRB.slice(), tokenHistory: state.tokenHistory };
   }
 
   const calcChunkEntropy = (st) => {
@@ -3462,12 +3856,12 @@ async function trainChunk(tokens, chunkCfg) {
     grad_logits[target] -= 1;
     for (let j = 0; j < grad_logits.length; j++) grad_logits[j] /= len;
     const g = model.backward(grad_logits, allCaches[t], cfg, gState);
-    gState = { R_A: g.grad_R_A_prev, R_B: legacy ? null : g.grad_R_B_prev, h: g.grad_h };
+    gState = { R_A: g.grad_R_A_prev, R_B: legacy ? null : g.grad_R_B_prev, h: g.grad_h, hs: g.hs };
   }
 
-  const SCOUT_SCALE = 0.5;
+  const SCOUT_SCALE = scoutScaleVal;
   let scoutLoss = 0;
-  if (recBOn) {
+  if (recBOn && SCOUT_SCALE > 0) {
     let gScout = null;
     for (let t = 0; t < len; t++) {
       if (!scoutCaches[t] || !scoutLogits[t]) continue;
@@ -3477,7 +3871,7 @@ async function trainChunk(tokens, chunkCfg) {
       gl[scoutTargets[t]] -= 1;
       for (let j = 0; j < gl.length; j++) gl[j] *= SCOUT_SCALE / len;
       const g = model.backward(gl, scoutCaches[t], cfg, gScout);
-      gScout = { R_A: g.grad_R_A_prev, R_B: g.grad_R_B_prev, h: g.grad_h };
+      gScout = { R_A: g.grad_R_A_prev, R_B: g.grad_R_B_prev, h: g.grad_h, hs: g.hs };
     }
     scoutLoss = scoutLoss / len * SCOUT_SCALE;
   }
@@ -3505,6 +3899,19 @@ async function trainChunk(tokens, chunkCfg) {
 
 /* Tier 1.1: Deterministic 80% train / 10% validation / 10% test contiguous split */
 /* v0.0013: Deterministic full-split stride chunk schedule & data-matched segment builder */
+function buildBlockStarts(trainLen, chunkSize, steps, seed) {
+  const maxStart = Math.max(1, trainLen - chunkSize - 2);
+  const span = Math.min(maxStart, steps * chunkSize);
+  const maxBase = Math.max(1, maxStart - span);
+  const blkRng = mulberry32(((seed >>> 0) ^ 0x85EBCA6B) >>> 0);
+  const baseStart = Math.floor(blkRng() * maxBase);
+  const out = new Int32Array(steps);
+  for (let s = 0; s < steps; s++) {
+    out[s] = (baseStart + s * chunkSize) % maxStart;
+  }
+  return out;
+}
+
 function buildStrideStarts(trainLen, chunkSize, steps, seed) {
   const numChunks = Math.max(1, Math.floor((trainLen - 1) / chunkSize));
   const out = new Int32Array(steps);
@@ -3558,6 +3965,17 @@ function splitCorpus80_10_10(allTokens) {
 function evalFullSplit(splitTokens, model, cfg = {}, chunkSize = 64) {
   const M = splitTokens.length;
   if (M < 2) return { loss: 0, bpb: 0, ppl: 1, fpResidual: 0, fpIters: 0 };
+  const useEMA = (cfg.ema === 'on' || (model && model.cfg && model.cfg.ema === 'on')) && model && model._emaArrays && !cfg._emaSwapped;
+  if (useEMA) {
+    const arrs = getModelParamArrays(model);
+    const saved = arrs.map(a => a.slice());
+    for (let i = 0; i < arrs.length; i++) arrs[i].set(model._emaArrays[i]);
+    invalidateTernaryCache();
+    const res = evalFullSplit(splitTokens, model, Object.assign({}, cfg, { _emaSwapped: true }), chunkSize);
+    for (let i = 0; i < arrs.length; i++) arrs[i].set(saved[i]);
+    invalidateTernaryCache();
+    return res;
+  }
 
   if (model.arch === 'ngram') {
     let nll = 0;
@@ -3569,7 +3987,7 @@ function evalFullSplit(splitTokens, model, cfg = {}, chunkSize = 64) {
       const target = splitTokens[i + 1];
       const p = model.prob(target, model.order > 1 ? hist : []);
       nll += -Math.log(p + 1e-12);
-      const bLen = (Tokenizer.vocab && Tokenizer.vocab.get(target)) ? Tokenizer.vocab.get(target).length : 1;
+      const bLen = (Tokenizer.vocabSize > 256 && Tokenizer.vocab && Tokenizer.vocab.get(target)) ? Tokenizer.vocab.get(target).length : 1;
       totalBytes += bLen;
     }
     const loss = nll / (M - 1);
@@ -3602,7 +4020,7 @@ function evalFullSplit(splitTokens, model, cfg = {}, chunkSize = 64) {
       for (let i = 0; i < logits.length; i++) sm += Math.exp(logits[i] - mx);
       const pT = Math.exp(logits[target] - mx) / sm;
       totalNLL += -Math.log(pT + 1e-10);
-      const bLen = (Tokenizer.vocab && Tokenizer.vocab.get(target)) ? Tokenizer.vocab.get(target).length : 1;
+      const bLen = (Tokenizer.vocabSize > 256 && Tokenizer.vocab && Tokenizer.vocab.get(target)) ? Tokenizer.vocab.get(target).length : 1;
       totalBytes += bLen;
       if (diagnostics) {
         totalRes += (diagnostics.fpResidualAvg || 0);
@@ -3910,11 +4328,14 @@ if (typeof self !== 'undefined' && typeof document === 'undefined' && typeof sel
       }
 
       const streamMode = msg.streamMode || cfg.stream || 'stride';
-      const strideStarts = streamMode === 'stride' ? buildStrideStarts(App.corpus.length, chunkSize, Math.max(totalSteps, App.step + 1), App.seed) : null;
+      const maxSt = Math.max(totalSteps, App.step + 1);
+      const strideStarts = streamMode === 'stride'
+        ? buildStrideStarts(App.corpus.length, chunkSize, maxSt, App.seed)
+        : (streamMode === 'block' ? buildBlockStarts(App.corpus.length, chunkSize, maxSt, App.seed) : null);
       let lastStepTime = Date.now();
       while (_wRunning && App.step < totalSteps) {
         if (_wPaused) { await yieldToMain(); lastStepTime = Date.now(); continue; }
-        const start = (streamMode === 'stride' && strideStarts && App.step < strideStarts.length)
+        const start = (strideStarts && App.step < strideStarts.length)
           ? strideStarts[App.step]
           : (App.step * chunkSize) % Math.max(1, App.corpus.length - chunkSize - 2);
         const chunk = App.corpus.subarray(start, start + chunkSize + 1);
@@ -4047,7 +4468,10 @@ function fpCfgNow() {
     coreA: g('sw-coreA') ? g('sw-coreA').value : 'on',
     coreB: g('sw-coreB') ? g('sw-coreB').value : 'on',
     fpInject: g('sw-fpInject') ? g('sw-fpInject').value : (g('cfg-fpinject') && g('cfg-fpinject').checked ? 'on' : 'off'),
-    fpNorm: g('sw-fpNorm') ? g('sw-fpNorm').value : 'layernorm',
+    fpNorm: g('sw-fpNorm') ? g('sw-fpNorm').value : 'rescale',
+    scoutScale: g('sw-scoutScale') ? parseFloat(g('sw-scoutScale').value) : 0.5,
+    helixState: g('sw-helixState') ? g('sw-helixState').value : 'shared',
+    ema: g('sw-ema') ? g('sw-ema').value : 'off',
     recordA: g('sw-recordA') ? g('sw-recordA').value : 'on',
     recordB: g('sw-recordB') ? g('sw-recordB').value : 'on',
     rbMode: g('sw-rbMode') ? g('sw-rbMode').value : (g('cfg-rbmode') ? g('cfg-rbmode').value : 'causal'),
@@ -4113,7 +4537,10 @@ function applyConfigToUI(cfg) {
   if (g('sw-innerFP')) g('sw-innerFP').value = String(c.innerFP);
   if (g('sw-fpIters')) g('sw-fpIters').value = String(c.fpIters);
   if (g('sw-fpInject')) g('sw-fpInject').value = c.fpInject;
-  if (g('sw-fpNorm')) g('sw-fpNorm').value = c.fpNorm || 'layernorm';
+  if (g('sw-fpNorm')) g('sw-fpNorm').value = c.fpNorm || 'rescale';
+  if (g('sw-scoutScale')) g('sw-scoutScale').value = String(c.scoutScale !== undefined ? c.scoutScale : 0.5);
+  if (g('sw-helixState')) g('sw-helixState').value = c.helixState || 'shared';
+  if (g('sw-ema')) g('sw-ema').value = c.ema || 'off';
   if (g('cfg-fpinject')) g('cfg-fpinject').checked = (c.fpInject === 'on');
   if (g('sw-recordA')) g('sw-recordA').value = c.recordA;
   if (g('sw-recordB')) g('sw-recordB').value = c.recordB;
@@ -4721,7 +5148,7 @@ function exportModel(silent=false) {
   const skipOptim = document.getElementById('chk-save-optim') && document.getElementById('chk-save-optim').checked;
   const ser = serializeModelWeights(m, App.trainState, !skipOptim);
   const data = {
-    version: '0.0013',
+    version: '0.0014',
     step: App.step,
     codeHash: App.codeHash || '',
     corpusHash: App.corpusHash || '',
@@ -4740,7 +5167,7 @@ function exportModel(silent=false) {
   const a = document.createElement('a');
   a.href = url;
   const exportName = document.getElementById('cfg-export-name').value.trim();
-  const baseName = exportName || 'learns-v0.0013';
+  const baseName = exportName || 'learns-v0.0014';
   a.download = `${baseName}-step${App.step}.learns`;
   if (!silent) a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -4754,8 +5181,8 @@ function importModel(input) {
   reader.onload = (e) => {
     try {
       const data = JSON.parse(e.target.result);
-      if (!['0.0005','0.0006','0.0007','0.0008','0.0009','0.0010','0.0011','0.0012','0.0013'].includes(data.version)) {
-        showToast('Incompatible .learns version ' + data.version + ' (reads v0.0005 to v0.0013)');
+      if (!['0.0005','0.0006','0.0007','0.0008','0.0009','0.0010','0.0011','0.0012','0.0013','0.0014'].includes(data.version)) {
+        showToast('Incompatible .learns version ' + data.version + ' (reads v0.0005 to v0.0014)');
         return;
       }
       Tokenizer.deserialize(data.tokenizer);
