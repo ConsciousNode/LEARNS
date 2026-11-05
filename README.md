@@ -2,6 +2,8 @@
 
 **LEARNS** (*Layered Electromagnetic-Turing Autonomous Recurrent Neural System*) is a zero-dependency, single-file browser language model (`index.html`) built by ConsciousNode SoftWorks. Every component is derived from one of the studio's six theory papers, and every component can be switched on or off from the browser Switchboard or the headless Node CLI (`tests/run.js`).
 
+> **Audit pending (Kehai, 2026-11-05):** v0.0014 is committed as Argon delivered it. The audit is scheduled after the usage reset. `results.jsonl` (233 records) wasn't in the delivery, so `tests/tables.js` can't regenerate the tables until it's added. v0.0013's results are in `versions/results-v0_0013.jsonl`.
+
 ---
 
 ## What Changed in v0.0014 ("Signal and Noise")
