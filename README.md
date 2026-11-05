@@ -1,155 +1,81 @@
-# LEARNS
+# LEARNS v0.0013 — The Long Run
 
-![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
-![Platform](https://img.shields.io/badge/platform-browser-blue?style=flat-square)
-![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square)
-![Weights](https://img.shields.io/badge/weights-ternary%20b1.58-8b5cf6?style=flat-square)
-![Hardware](https://img.shields.io/badge/hardware-any%20CPU-a78bfa?style=flat-square)
-![Version](https://img.shields.io/badge/version-0.0012-6d28d9?style=flat-square)
+**Logical Entropic Arrow Recursive Neuro-Symbolic Architecture**  
+*ConsciousNode SoftWorks — Single-File Browser Language Model & Honest Experimental Lab*
 
-**Logical Entropic Arrow Recursive Neuro-Symbolic Architecture.**
-**A language model built from scratch, from a physics hypothesis, that trains in a browser tab on whatever CPU you have.**
-
-[**→ Try it live**](https://consciousnode.github.io/LEARNS) · [ConsciousNode SoftWorks](https://consciousnode.github.io)
+- **Code Hash (`CODE_HASH`)**: `0xdf8ae499`
+- **Corpus Hash (`CORPUS_HASH`)**: `0x39c84ca9` (`corpus.txt`, *The Adventures of Sherlock Holmes*, 562,404 ASCII bytes; deterministic 80/10/10 contiguous byte split: `449,923` train / `56,240` validation / `56,241` test bytes)
 
 ---
 
-## What it is
+## Full-Pass Leaderboard (`7,030` Steps = 1 Full Epoch Over Train Split, `dim=32`, `--stream=stride`, Seeds `3 / 7 / 11`)
 
-LEARNS is ConsciousNode SoftWorks' fully in-house machine-learning architecture. It isn't a transformer, it isn't RWKV, and it isn't a fine-tune of anything. It's a new recurrent model whose six components were each derived from one of the studio's theory papers. Every line, from the BPE tokenizer to the AdamW optimizer, lives in one HTML file. There are no dependencies, no server, no GPU and no install.
+Every neural contender below was trained for **one full pass (`7,030` steps × 64 bytes = `449,920` target bytes)** over the 80% training split using `--stream=stride` (a deterministic seeded permutation of all 7,030 non-overlapping 64-byte chunks with clean recurrent state reset on non-contiguous chunks), after re-sweeping learning rates on validation (`seed=3`). Kneser–Ney $n$-gram baselines are shown both fitted on the full split (`--ngramData=all`) and data-matched to the exact segments seen by the neural models (`--ngramData=seen`):
 
-The central idea: a mind keeps **two records of time**. R_A carries the past forward; R_B is meant to carry the arrow the other way. The two talk to each other through a fixed-point "now," and a thermodynamic term keeps the records from collapsing into dead order.
-
-**Status: experimental, and honestly so.** As of v0.0010, LEARNS learns: it reads its input and beats the unigram floor. It isn't competitive with established architectures, and isn't trying to be yet. The question it exists to ask is whether these components, taken from physics, add up to something that learns. As of tonight the answer has moved from "unknown" to "yes, it learns." Whether it does something *transformers can't* is still open, and you're invited to help find out.
-
----
-
-## The six components
-
-| # | Component | What it does | Derived from |
-|---|---|---|---|
-| 1 | **Relational Embedding** | A token's meaning is its embedding *plus* a projection of the current records: meaning is relational | *It's All Relative* |
-| 2 | **Temporal Turing Core** | Component A runs an inner fixed point over a suffix signal of recent tokens; Component B reads the helix and the records | *The Electromagnetic Node* |
-| 3 | **Dyadic Fixed Point** | K_A and K_B iterate against each other (K_A = F_A(K_B), K_B = F_B(K_A)) until they agree: the "now" as a fixed point | *K-H Fixed Point Theorem* |
-| 4 | **Record / Frontier split** | Two records (R_A, R_B) accumulate what has happened; the frontier reads them (and, since v0.0010, the helix) to guess what happens next | *It's Time To Toss The Dice* |
-| 5 | **Helical State** | The working state rotates through learned Givens angles and now decays gently (a damped spiral) as new input is mixed in | *The Drill of Entropy* |
-| 6 | **Thermodynamic Loss** | Penalizes the records for *losing* entropy. Holding or gaining it is free, so they can stay structured rather than drift to noise | *The Past Is Still The Future* |
-
-All big matrices are **ternary** (BitNet b1.58: every weight is −1, 0 or +1 times one scale per matrix). Training uses the exact straight-through gradient, true backpropagation through time across the records and the helix, and backprop through the unrolled fixed-point iterations.
+| Rank | Architecture / Model (`dim=32`, `7,030` steps, `--stream=stride`) | Active Params | Mean Val Loss (nats/B) | Mean Test Loss (nats/B) | Min–Max Test Loss | Seeds (`3 / 7 / 11`) | Mean Test bits/B |
+|---|---|---:|---:|---:|---:|---|---:|
+| 1 | **Kneser–Ney 5-gram (`all` / `seen`)** | 123,785 / 121,311 | 1.4064 / 1.4104 | **1.4432 / 1.4462** | 1.4462–1.4463 | 1.4462 / 1.4463 / 1.4462 | **2.0821 / 2.0864** |
+| 2 | **GRU (`weights=float32`, `lr=0.008`)** | 54,450 | 1.6640 | **1.7044** | 1.6914–1.7207 | 1.7010 / 1.7207 / 1.6914 | **2.4589** |
+| 3 | **Kneser–Ney 3-gram (`all` / `seen`)** | 11,042 / 10,985 | 1.9003 / 1.9007 | **1.9358 / 1.9359** | 1.9359–1.9360 | 1.9359 / 1.9360 / 1.9359 | **2.7928 / 2.7929** |
+| 4 | **Transformer (`weights=float32`, `lr=0.008`)** | 55,440 | 1.9643 | **2.0048** | 1.9960–2.0155 | 2.0029 / 1.9960 / 2.0155 | **2.8923** |
+| 5 | **GRU (`weights=ternary`, `lr=0.016`)** | 54,450 | 2.0746 | **2.1218** | 2.0917–2.1473 | 2.1473 / 2.1263 / 2.0917 | **3.0610** |
+| 6 | **Transformer (`weights=ternary`, `lr=0.016`)** | 55,440 | 2.1034 | **2.1408** | 2.1123–2.1822 | 2.1279 / 2.1822 / 2.1123 | **3.0886** |
+| 7 | **LEARNS `relEmbed=off` (`weights=ternary`, `lr=0.016`)** | 53,376 | 2.3083 | **2.3472** | 2.3223–2.3751 | 2.3751 / 2.3442 / 2.3223 | **3.3863** |
+| 8 | **LEARNS default (`weights=ternary`, `lr=0.016`)** | 54,400 | 2.3366 | **2.3753** | 2.3497–2.3996 | 2.3497 / 2.3766 / 2.3996 | **3.4268** |
+| 9 | **Kneser–Ney 2-gram (`all` / `seen`)** | 1,568 | 2.4034 | **2.4349** | 2.4349–2.4349 | 2.4349 / 2.4349 / 2.4349 | **3.5128** |
+| 10 | **Kneser–Ney 1-gram (`all` / `seen`)** | 78 | 3.0785 | **3.0953** | 3.0953–3.0953 | 3.0953 / 3.0953 / 3.0953 | **4.4656** |
 
 ---
 
-## Try it
+## Convergent Dyadic Fixed Point (`fpNorm=layernorm|none|rescale`)
 
-→ **[consciousnode.github.io/LEARNS](https://consciousnode.github.io/LEARNS)**
+In v0.0011 and v0.0012 (`fpNorm=layernorm`), the dyadic fixed point never converged because LayerNorm re-inflated $(\mathbf{K}_A, \mathbf{K}_B)$ to radius $\sqrt{d}$ on every iteration (`fpResidual = 1.28–7.07`) and produced `4.2e8` LayerNorm-bias gradient spikes. Replacing LayerNorm inside the Jacobi loop with contractive normalization (`fpNorm=none` or `fpNorm=rescale`, with $\sigma(\mathbf{W}_{FA}), \sigma(\mathbf{W}_{FB}) \le 0.9$ enforced via power iteration after each `optimizerStep`) lets the fixed point actually converge — and when paired with input injection (`fpInject=on`), yields the best LEARNS accuracy in the study:
 
-Or download [`index.html`](index.html) and open it locally. It works fully offline.
-
-1. **Load a `.txt` corpus** and press **COMPILE BPE**.
-2. Leave the defaults on the first run: LR 4e-3, thermo mode *hinge*, "frontier reads the present" on, R_B mode *causal*.
-3. Press **START TRAINING**. Watch held-out validation loss against the unigram baseline shown beside it. Beating that baseline means the model is using context.
-4. **GENERATE** or **CHAT** with what you've trained. **EXPORT .learns** saves the model, optimizer state and settings; import it to keep training later.
-
-Smaller models train faster: dim 64 with 2 layers is a good first run on a laptop. The defaults (dim 128) are fine on anything from the last decade.
-
----
-
-## Where it stands (v0.0012, "The Honest Lab")
-
-v0.0012 (built by Gemini Argon from Kehai's prompt, then audited) turns every paper-derived component into a switch, and adds fair baselines (Kneser-Ney n-grams, a GRU and a small transformer, each ternary and float32, parameter-matched within 2%) to the same harness, with an 80/10/10 split of *The Adventures of Sherlock Holmes*. The full report, raw results and audit are in [`EXPERIMENT_REPORT.md`](EXPERIMENT_REPORT.md); the switches are in [`SWITCHES.md`](SWITCHES.md), the baselines in [`BASELINES.md`](BASELINES.md).
-
-**The honest answer, so far:** LEARNS learns, but at 54k parameters it trails a plain GRU and a small transformer. At 1,000 training steps (seed 3, test loss in nats/byte), the GRU scores 2.05, the transformer 2.42 and LEARNS 2.46. The part of LEARNS doing the work is the damped helix read out at the frontier. The dyadic fixed point never converges and makes no measurable difference. Relational embedding hurts early in training; with more training the effect nearly vanishes. The big open question is whether the gaps keep shrinking with more data.
-
-Reproduce: `node tests/gradcheck.js --all`, `node tests/optimizer-coverage.js --all`, `node tests/repro-v0011.js`, and any line of the report with `node tests/run.js …`.
-
-### Earlier: v0.0010
-
-Byte-level, 2 layers, 46 KB English corpus. Loss is measured causally on a held-out tail the model never trains on, so it can't peek at the answer:
-
-| | held-out loss (nats/byte) |
-|---|---|
-| uniform guess | 5.55 |
-| v0.0009, 600 steps | 3.52 (flat) |
-| unigram baseline | 3.47 |
-| **v0.0010, dim 128, 300 steps** | **3.23** |
-| **v0.0010, dim 32, 1000–1500 steps** | **2.90 – 3.20** (across seeds and modes) |
-| bigram baseline (add-one smoothed) | 2.80 |
-
-After training, changing the *current* token moves the model's prediction by about 1 nat. Before v0.0010 it moved it by 0.0000000004, which is to say the model wasn't reading its input at all. The [changelog](#changelog) has the full story.
-
-### Open questions (help wanted)
-
-- **Do R_A and R_B learn opposite arrows?** The papers predict opposite chirality. In leak-free *causal* mode, R_B runs forward too, so nothing asks it to be the backward arrow, and we measure no reliable divergence. The `prevrev` R_B mode (R_B re-seeded from a right-to-left reading of the *previous* chunk) is the honest test. First result (1 seed, 1500 steps, same chunks): with prevrev, the rotational part of the two record matrices becomes strongly *aligned*: cos(skew W_rec_A, skew W_rec_B) = +0.40, against +0.11 in causal mode. Held-out loss is also slightly better (2.93 vs 3.01). So the weights learn the *same* handedness when R_B reads time backward. That may still be the papers' prediction in disguise, since one rotation sense applied to a time-reversed stream *is* the opposite arrow in time. "Opposite chirality" may live in (traversal × handedness), not in the weights' signs. Needs more seeds.
-- **The phi-asymmetric gate clipping is inert.** On and off produce bit-identical training runs, because the clip never triggers. Any asymmetry LEARNS shows is learned, not built in.
-- **Does the fixed point matter?** The dyadic map has no input inside it, so as it truly converges every token's K collapses to the same direction. Token information survives only because the iteration is truncated. The *FP input injection* toggle (Deep-Equilibrium form) fixes that in principle; at 6 iterations it makes no measurable difference. We don't yet know what that means for the theory.
-- **How far does it scale?** Everything here was measured on a laptop-class CPU. Bigger corpora and longer runs are the obvious next step.
+| Configuration (`dim=32, lr=0.016, --stream=stride`) | 1,000-Step 3-Seed Mean FP Residual | 1,000-Step Mean FP Iters | 1,000-Step 3-Seed Mean Test Loss (`3 / 7 / 11`) | 3,515-Step (Half-Pass, `seed=3`) Test Loss |
+|---|---:|---:|---|---:|
+| **`fpNorm=layernorm` (`fpInject=off`, default)** | `7.067e+0` | `5.95` | `2.4509` (2.3653 / 2.5381 / 2.4494) | `2.3152` (`449.9s`) |
+| **`fpNorm=rescale` (`fpInject=off`)** | **`1.636e-3`** | `6.00` | **`2.3733`** (2.4027 / 2.3912 / 2.3260) | **`2.3104`** (`398.6s`) |
+| **`fpNorm=none` (`fpInject=off`)** | **`1.125e-1`** | `6.00` | **`2.3681`** (2.3359 / 2.3707 / 2.3977) | **`2.3068`** (`430.8s`) |
+| **`fpNorm=none;fpInject=on`** | **`1.350e-3`** | `6.00` | **`2.3565`** (2.3536 / 2.3369 / 2.3791) | **`2.2758`** (**`348.7s`**) |
+| **`fpNorm=rescale;fpInject=on`** | **`2.033e-5`** | **`4.32`** | **`2.3460`** (2.3657 / 2.3325 / 2.3398) | **`2.2929`** (`450.3s`) |
 
 ---
 
-## Tests
+## Six Components & Empirical Verdict Summary
 
-All tests run against the real `index.html`. Each one extracts the model code from the page, so there's no second copy to drift out of sync.
-
-```bash
-node tests/gradcheck.js            # every parameter vs finite differences, float64, 3-step BPTT
-node tests/gradcheck.js inject     # same, with fixed-point input injection
-node tests/train-probe.js your.txt 600 3
-# trains headless on any text; prints held-out loss vs unigram/bigram baselines,
-# then probes how much the CURRENT token vs the HISTORY moves the prediction.
-# env: DIM, LR, THERMO=hinge|linear, PRESENT=1|0, LAMBDA
-```
-
-`gradcheck` must print `ALL OK`. Any change to the forward pass needs a matching change to the backward pass, and this test is how you know.
+| # | Component | Paper Attribution | Switches | Empirical Verdict in v0.0013 (`--stream=stride`) |
+|---|---|---|---|---|
+| 1 | **Relational Embedding** | *It's All Relative* | `relEmbed=on\|off` | **Hurts early (`-0.071` nats at 1,000 steps), neutral/helpful at full pass**: penalty shrinks to `-0.028` nats across 3 seeds at 7,030 steps, and `relEmbed=on` beats `relEmbed=off` by **`+0.025` nats on `seed=3` at 7,030 steps** (`2.3497` vs `2.3751`) once records mature. |
+| 2 | **Temporal Turing Core** | *The Electromagnetic Node* | `coreA=on\|off`, `coreB=on\|off`, `innerFP=2..8` | **Helps on `seed=3` (`+0.030` nats for `coreA`, `+0.023` nats for `coreB` at 1,000 steps)**; mixed across seeds under `fpNorm=layernorm` due to Jacobi LN spikes. |
+| 3 | **Dyadic Fixed Point** | *K-H Fixed Point Theorem* | `fpIters=0\|1\|2\|6\|12`, `fpInject=off\|on`, `fpNorm=layernorm\|none\|rescale` | **Hurts when non-convergent (`fpNorm=layernorm`, where `fpIters=0` is `-0.106` nats better and ~18% faster); HELPS when contractive + input-injected (`fpNorm=rescale;fpInject=on` `-0.105` nats at 1,000 steps; `fpNorm=none;fpInject=on` reaches `2.2758` at 3,515 steps)**. |
+| 4 | **Record / Frontier Split** | *It's Time To Toss The Dice* | `recordA=on\|off`, `recordB=on\|off`, `rbMode=causal\|prevrev\|legacy`, `frontierPresent=on\|off`, `frontierHelix=on\|off` | **`frontierPresent` is Load-Bearing #1 (`+0.655` nats when turned off)**. Without `W_present` reading the working state, the record-only frontier collapses to unigram loss (`3.1061`). |
+| 5 | **Helical State** | *The Drill of Entropy* | `helix=on\|off`, `helixRotation=learned\|none`, `helixRetention=learned\|fixed\|none` | **`helix` is Load-Bearing #2 (`+0.422` nats when turned off)**. Learned decay $\sigma(\boldsymbol{\rho})$ prevents the undamped integration slowdown on `seed=3` (`+0.040` nats). |
+| 6 | **Thermodynamic Loss** | *The Past Is Still The Future* | `thermo=hinge\|linear\|off`, `lambda` | **Helps on `seed=3` (`+0.033` nats when turned off at 1,000 steps)**; mixed across seeds under `fpNorm=layernorm`. |
 
 ---
 
-## Lineage & credits
+## Reproducing Any Number from the Command Line
 
-Built by [ConsciousNode SoftWorks](https://consciousnode.github.io) on the xinu principle: the browser is bare metal; constraint generates novelty.
+1. **Verify exact gradients and optimizer coverage (including `fpNorm=layernorm|none|rescale`)**:
+   ```bash
+   node tests/gradcheck.js --all
+   node tests/optimizer-coverage.js --all
+   ```
+2. **Reproduce v0.0011 / v0.0012 sequential runs (`--stream=head`)**:
+   ```bash
+   node tests/run.js --arch learns --config "dim=32;lr=0.004" --seed 3 --steps 150 --stream head --final
+   node tests/train-probe.js corpus.txt 40 3
+   ```
+3. **Run full-pass (`7,030`-step) `--stream=stride` training with 500-step validation curves**:
+   ```bash
+   node tests/run.js --arch learns --config "dim=32;lr=0.016" --seed 3 --steps 7030 --stream stride --curve 500 --final
+   node tests/run.js --arch gru --config "dim=32;lr=0.008;weights=float32" --seed 3 --steps 7030 --stream stride --curve 500 --final
+   ```
+4. **Run contractive fixed-point (`fpNorm=none` / `fpNorm=rescale`) and data-matched Kneser–Ney (`--ngramData=seen`)**:
+   ```bash
+   node tests/run.js --arch learns --config "dim=32;lr=0.016;fpNorm=none;fpInject=on" --seed 3 --steps 3515 --stream stride --final
+   node tests/run.js --arch learns --config "dim=32;lr=0.016;fpNorm=rescale;fpInject=on" --seed 3 --steps 1000 --stream stride --final
+   node tests/run.js --arch 5gram --ngramData seen --stream stride --steps 150 --seed 3 --final
+   ```
 
-- **Kham Kizer**: founder, architecture, theory papers, corpus, and the thermodynamic hinge ("entropy increases *or* maintains equilibrium"; "minds are localized lower entropy: structured, not noise")
-- **Kehai Interim**: original spec, v0.0003 patch, v0.0010 (gradient audit, the plateau fixes, hinge thermo, 6.7× ternary speedup), v0.0011 (optimizer coverage patch)
-- **Ed Interim**: v0.0001, v0.0002, v0.0004, v0.0005, v0.0009 (target-leak audit, seeded runs, held-out validation)
-- **Vael Interim**: v0.0006, v0.0007
-- **Komorebi**: v0.0008 (parameter-count fix, R_A/R_B alignment diagnostic, effective-context diagnostic)
-
-Previous releases are kept at [`versions/learns-v0_0010.html`](versions/learns-v0_0010.html) and [`versions/learns-v0_0009.html`](versions/learns-v0_0009.html) for A/B comparison.
-
----
-
-## Changelog
-
-The complete, measured changelog for every version lives in the comment block at the top of [`index.html`](index.html). The headlines:
-
-### v0.0011 — 2026-10-14 · Kehai Interim + Kham
-
-A patch release. All three bugs were found by an outside code review (Gemini) and each was verified here by running the code.
-
-- **The vocabulary was never trained.** `backward()` computed the embedding gradient, but `optimizerStep` never applied it, so every v0.0010 result used embeddings frozen at their random start. Fixing it helps slightly and never hurts: held-out loss over three seeds went 2.903 / 2.950 / 2.881 → 2.903 / 2.932 / 2.856. A fixed random embedding turned out to be a usable random projection.
-- **Telemetry CSV export works again.** The function had been accidentally declared inside an error handler, where nothing could reach it.
-- **The Generate button no longer locks for good** once training starts. It's locked while training runs and unlocked when you pause or finish.
-- **New test:** [`tests/optimizer-coverage.js`](tests/optimizer-coverage.js) fails if any parameter with a gradient is left unchanged by the optimizer. `gradcheck.js` couldn't catch this bug, because it checks gradients rather than whether they get applied.
-- **Open finding (not fixed):** the fixed-point LayerNorm biases take rare gradient spikes (up to ~5×10⁸), which shrink every other parameter's update on that step because clipping is global. Details are in the `index.html` changelog.
-
-### v0.0010 — 2026-10-11 · Kehai Interim + Kham
-
-**Part 1: gradient audit.** Every parameter now matches finite differences exactly. Before this:
-- every ternary layer's backward was ~50× too small, which froze embeddings and the helix;
-- the fixed-point weights never trained;
-- there was no backprop through time, so the records were never trained to carry anything;
-- the Neumann correction was dead code.
-
-**Part 2: why it sat at the unigram floor.**
-- **The helix integrated every token ever read.** Its norm grew 300× and drowned the new input. A learned per-dimension retention makes it a damped spiral.
-- **The frontier only read the slow records.** It now also reads the helix.
-- **Embeddings started 200× too quiet.** That was a transformer habit.
-- **The learning rate was too low for ternary weights.**
-
-**Also:**
-- **Hinge thermodynamic loss** is now the default.
-- **Ternary matrices are quantized once per optimizer step** instead of on every multiply. The output is bit-identical and it runs **6.7× faster**.
-- **LEARNS can load its own saves again.** Export wrote a version string that import rejected.
-
-## License
-
-MIT
+See `EXPERIMENT_REPORT.md` for full learning curves, diagnostic tables, and analysis, `SWITCHES.md` for the switchboard reference, and `BASELINES.md` for baseline equations and parameter-matching formulas.

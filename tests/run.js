@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// Headless experiment runner for LEARNS v0.0012: The Honest Lab
+// Headless experiment runner for LEARNS v0.0013: "The Long Run"
 // Loads the marked slice /*@@LEARNS_BEGIN*/ ... /*@@LEARNS_END*/ from index.html,
 // verifies/computes CODE_HASH and CORPUS_HASH, runs deterministic 80/10/10 split,
+// supports --stream=stride|head (default stride) and --ngramData=all|seen (default all),
+// resets recurrent state across non-contiguous chunks identically for every architecture,
 // trains for --steps, evaluates causally over the full validation split (and test split only with --final),
 // and prints one JSON line.
 'use strict';
@@ -15,8 +17,12 @@ function parseArgs(argv) {
     config: '',
     seed: 3,
     steps: 400,
+    stepsExplicit: false,
+    stream: 'stride',
+    ngramData: 'all',
     final: false,
     curveEvery: 0,
+    curveBytes: 0,
     file: null
   };
   for (let i = 0; i < argv.length; i++) {
@@ -31,10 +37,16 @@ function parseArgs(argv) {
     if (a.startsWith('--config=')) { out.config = a.slice(9); continue; }
     if (a === '--seed') { out.seed = Number(next()); continue; }
     if (a.startsWith('--seed=')) { out.seed = Number(a.slice(7)); continue; }
-    if (a === '--steps') { out.steps = Number(next()); continue; }
-    if (a.startsWith('--steps=')) { out.steps = Number(a.slice(8)); continue; }
+    if (a === '--steps') { out.steps = Number(next()); out.stepsExplicit = true; continue; }
+    if (a.startsWith('--steps=')) { out.steps = Number(a.slice(8)); out.stepsExplicit = true; continue; }
+    if (a === '--stream') { out.stream = String(next()).toLowerCase(); continue; }
+    if (a.startsWith('--stream=')) { out.stream = a.slice(9).toLowerCase(); continue; }
+    if (a === '--ngramData') { out.ngramData = String(next()).toLowerCase(); continue; }
+    if (a.startsWith('--ngramData=')) { out.ngramData = a.slice(12).toLowerCase(); continue; }
     if (a === '--curve') { out.curveEvery = Number(next()); continue; }
     if (a.startsWith('--curve=')) { out.curveEvery = Number(a.slice(8)); continue; }
+    if (a === '--curveBytes') { out.curveBytes = Number(next()); continue; }
+    if (a.startsWith('--curveBytes=')) { out.curveBytes = Number(a.slice(13)); continue; }
     if (a === '--file') { out.file = next(); continue; }
     if (a.startsWith('--file=')) { out.file = a.slice(7); continue; }
   }
@@ -74,9 +86,14 @@ const { train, val, test } = L.splitCorpus80_10_10(allTokens);
   L.App.prevScoutRB = null;
   L.App.phiClip = cfg.phiClip !== 'off';
   L.App.clipMode = cfg.clipMode || 'global';
+  L.App.fpNorm = cfg.fpNorm || 'layernorm';
 
-  const steps = (model.arch === 'ngram') ? 0 : cli.steps;
   const chunkSize = cfg.chunk || 64;
+  const fullEpochSteps = Math.floor((train.length - 1) / chunkSize);
+  const steps = (model.arch === 'ngram')
+    ? (cli.ngramData === 'seen' ? (cli.stepsExplicit ? cli.steps : fullEpochSteps) : 0)
+    : cli.steps;
+
   let prevStart = undefined;
   let recentTrainLosses = [];
   let firstTrainLoss = null, lastTrainLoss = null;
@@ -84,16 +101,37 @@ const { train, val, test } = L.splitCorpus80_10_10(allTokens);
   let fpResidualSum = 0, fpItersSum = 0, fpAgreeSum = 0, diagCount = 0;
   const valCurve = [];
 
-  let curveMs = 0;
+  let curveMs = 0, curveCpuUs = 0;
   const trnT0 = Date.now();
+  const trnCpu0 = process.cpuUsage();
+
   if (model.arch === 'ngram') {
-    model.fit(train);
+    if (cli.ngramData === 'seen') {
+      const starts = cli.stream === 'stride'
+        ? L.buildStrideStarts(train.length, chunkSize, steps, cli.seed)
+        : Int32Array.from({ length: steps }, (_, s) => (s * chunkSize) % Math.max(1, train.length - chunkSize - 2));
+      const segments = L.buildSeenSegments(train, starts, chunkSize);
+      model.fitSegments(segments);
+    } else {
+      model.fit(train);
+    }
   } else {
+    const strideStarts = cli.stream === 'stride'
+      ? L.buildStrideStarts(train.length, chunkSize, steps, cli.seed)
+      : null;
+
     for (let step = 0; step < steps; step++) {
-      const start = (step * chunkSize) % Math.max(1, train.length - chunkSize - 2);
+      const start = cli.stream === 'stride'
+        ? strideStarts[step]
+        : (step * chunkSize) % Math.max(1, train.length - chunkSize - 2);
       const chunk = train.subarray(start, start + chunkSize + 1);
       cfg.contiguous = (prevStart !== undefined && start === prevStart + chunkSize);
+      if (!cfg.contiguous) {
+        L.App.trainState = model.getEmptyState();
+        L.App.prevScoutRB = null;
+      }
       prevStart = start;
+
       const lr = L.cosineLR(step + 1, cfg.lr, cfg.lrMin, cfg.warmup, Math.max(1, steps));
       const { loss, thermoLoss, diag } = await L.trainChunk(chunk, cfg);
       L.optimizerStep(model, step + 1, lr, cfg);
@@ -114,16 +152,27 @@ const { train, val, test } = L.splitCorpus80_10_10(allTokens);
         diagCount++;
       }
 
-      if (cli.curveEvery > 0 && ((step + 1) % cli.curveEvery === 0 || step + 1 === steps)) {
+      if (cli.curveEvery > 0 && (step + 1) % cli.curveEvery === 0 && step + 1 < steps) {
         const ct0 = Date.now();
-        const vc = L.evalFullSplit(val, model, cfg, chunkSize);
+        const cCpu0 = process.cpuUsage();
+        const valTarget = cli.curveBytes > 0 ? val.subarray(0, Math.min(val.length, cli.curveBytes + 1)) : val;
+        const vc = L.evalFullSplit(valTarget, model, cfg, chunkSize);
+        const cCpu = process.cpuUsage(cCpu0);
         curveMs += (Date.now() - ct0);
+        curveCpuUs += (cCpu.user + cCpu.system);
         valCurve.push({ step: step + 1, valLoss: Number(vc.loss.toFixed(6)), valBpb: Number(vc.bpb.toFixed(6)) });
       }
     }
   }
+
+  const trnCpu = process.cpuUsage(trnCpu0);
+  const trainCpuSec = Math.max(1e-6, (trnCpu.user + trnCpu.system - curveCpuUs) / 1e6);
   const trainSec = Math.max(1e-6, (Date.now() - trnT0 - curveMs) / 1000);
+
   const valRes = L.evalFullSplit(val, model, cfg, chunkSize);
+  if (model.arch !== 'ngram' && cli.curveEvery > 0 && steps > 0) {
+    valCurve.push({ step: steps, valLoss: Number(valRes.loss.toFixed(6)), valBpb: Number(valRes.bpb.toFixed(6)) });
+  }
   const testRes = cli.final ? L.evalFullSplit(test, model, cfg, chunkSize) : null;
   const wallSec = (Date.now() - wallT0) / 1000;
 
@@ -131,15 +180,20 @@ const { train, val, test } = L.splitCorpus80_10_10(allTokens);
     ? recentTrainLosses.reduce((a, b) => a + b, 0) / recentTrainLosses.length
     : null;
   const align = model.getAlignmentDiag ? model.getAlignmentDiag() : null;
-  const tokPerSec = steps > 0
+  const tokPerSec = (model.arch !== 'ngram' && steps > 0)
     ? Math.round((steps * chunkSize) / trainSec)
     : Math.round((val.length - 1) / Math.max(1e-6, wallSec));
+  const cpuTokPerSec = (model.arch !== 'ngram' && steps > 0)
+    ? Math.round((steps * chunkSize) / trainCpuSec)
+    : tokPerSec;
 
   const record = {
     codeHash: CODE_HASH,
     corpusHash: CORPUS_HASH,
     arch: cfg.arch,
     config: L.serializeConfig(cfg, true),
+    stream: cli.stream,
+    ngramData: model.arch === 'ngram' ? cli.ngramData : undefined,
     seed: cli.seed,
     steps,
     paramCount: model.getParamCount(cfg),
@@ -153,7 +207,9 @@ const { train, val, test } = L.splitCorpus80_10_10(allTokens);
     bitsPerByte: Number((testRes ? testRes.bpb : valRes.bpb).toFixed(6)),
     wallClockSec: Number(wallSec.toFixed(2)),
     trainSec: Number(trainSec.toFixed(2)),
+    trainCpuSec: Number(trainCpuSec.toFixed(2)),
     tokensPerSec: tokPerSec,
+    cpuTokensPerSec: cpuTokPerSec,
     fpResidual: Number((valRes.fpResidual || (diagCount ? fpResidualSum / diagCount : 0)).toFixed(6)),
     fpItersAvg: Number((valRes.fpIters || (diagCount ? fpItersSum / diagCount : 0)).toFixed(3)),
     fpAgree: Number((diagCount ? fpAgreeSum / diagCount : 0).toFixed(6)),
@@ -162,7 +218,7 @@ const { train, val, test } = L.splitCorpus80_10_10(allTokens);
     rB_bias: align ? Number((align.rB_bias || 0).toFixed(6)) : 0,
     divergence: align ? Number((align.divergence || 0).toFixed(6)) : 0,
     spikeCount,
-    spikeFreq: steps > 0 ? Number((spikeCount / steps).toFixed(4)) : 0,
+    spikeFreq: (model.arch !== 'ngram' && steps > 0) ? Number((spikeCount / steps).toFixed(4)) : 0,
     maxBetaGrad: Number(maxBetaGrad.toExponential(3))
   };
   if (valCurve.length > 0) record.valCurve = valCurve;

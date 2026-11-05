@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEARNS v0.0012: The Honest Lab — ConsciousNode SoftWorks</title>
+<title>LEARNS v0.0013: The Long Run — ConsciousNode SoftWorks</title>
 <!--
-  LEARNS v0.0012 — THE HONEST LAB
+  LEARNS v0.0013 — THE LONG RUN
   Logical Entropic Arrow Recursive Neuro-Symbolic Architecture
   ConsciousNode SoftWorks — November 2026
 
@@ -18,7 +18,28 @@
     6. Thermodynamic Loss         — from The Past Is Still The Future
 
   Authors: Kham Kizer · Kehai Interim (spec)
-  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009) · Kehai Interim (v0.0010, v0.0011, v0.0012)
+  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009) · Kehai Interim (v0.0010, v0.0011, v0.0012, v0.0013)
+
+  v0.0013 (Kehai Interim + Kham, Nov 4 2026) — THE LONG RUN.
+  Fixes the v0.0012 data-coverage bottleneck (where 150 steps of sequential chunking read only the first
+  9,600 bytes of the 449,923-byte training split) and forces the dyadic fixed point to actually converge:
+  - FULL-BOOK STRIDE STREAM (--stream=stride, new default): deterministic per-epoch seeded permutation
+    of all 7,030 non-overlapping 64-byte chunks across the 80% training split, with clean recurrent state
+    reset whenever consecutive chunks are not contiguous (identically across LEARNS, GRU, and Transformer).
+    --stream=head preserves the exact v0.0012 sequential schedule bit-for-bit.
+  - DATA-MATCHED KNESER-NEY (--ngramData=seen): fits 1/2/3/5-gram interpolated Kneser-Ney tables on the
+    exact segments seen by the neural models at any step budget alongside full-split tables (--ngramData=all).
+  - CONTRACTIVE DYADIC FIXED POINT (fpNorm=layernorm|none|rescale, default layernorm):
+    * layernorm: standard LayerNorm inside the Jacobi loop (bit-identical to v0.0011/v0.0012; never converges
+      because LayerNorm re-inflates the state to radius sqrt(d) every iteration).
+    * none: removes LayerNorm inside the Jacobi loop and enforces spectral norm sigma(W_FA), sigma(W_FB) <= 0.9
+      via deterministic power iteration after each optimizer step, guaranteeing Banach contraction.
+    * rescale: centers activations and scales by 1/sqrt(1 + sum((x - mean)^2)) without the sqrt(d) re-inflation,
+      clamping |gamma| <= 1 and sigma(W_FA), sigma(W_FB) <= 0.9 so the centered map is strictly contractive.
+  - PLAIN-JS TERNARY SPEEDUP: precomputes per-row positive/negative index lists cached on W._qcache per
+    optimizer step, pools layerNormBackward scratch buffers, and skips unused entropy diagnostics during the
+    reverse scout pass, speeding up ternary training by ~1.8x with bit-identical training and validation losses.
+  - format: writes 0.0013; import reads 0.0005-0.0013.
 
   v0.0012 (Kehai Interim + Kham, Nov 4 2026) — THE HONEST LAB.
   Turns every paper-derived component into a clean switch, adds fair parameter-matched baselines
@@ -323,8 +344,8 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
 <body>
 
 <div id="header">
-  <h1>LEARNS v0.0012</h1>
-  <span class="sub">The Honest Lab — ConsciousNode SoftWorks</span>
+  <h1>LEARNS v0.0013</h1>
+  <span class="sub">The Long Run — ConsciousNode SoftWorks</span>
   <div id="token-pill" style="display:flex;align-items:center;gap:10px;font-size:11px;color:var(--text-dim);margin-left:10px;flex-wrap:wrap;">
     <span>CODE <b id="tc-codehash" style="color:var(--accent);">—</b></span>
     <span>CORPUS_H <b id="tc-corpushash" style="color:var(--accent);">—</b></span>
@@ -489,6 +510,13 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
       <div class="field">
         <label>Validate every N steps</label>
         <input type="number" class="num-input" id="cfg-valevery" value="50" min="1" step="10">
+      </div>
+      <div class="field">
+        <label>Chunk stream (--stream)</label>
+        <select class="num-input" id="cfg-stream">
+          <option value="stride" selected>stride — full-split seeded permutation (v0.0013)</option>
+          <option value="head">head — sequential from byte 0 (v0.0012)</option>
+        </select>
       </div>
       <div class="field">
         <label>Corpus control</label>
@@ -739,6 +767,15 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
               <option value="on">on — inject a_t, b_t each iteration</option>
             </select>
           </div>
+          <div class="sw-item">
+            <label>fpNorm <span>Default: layernorm</span></label>
+            <div class="sw-desc">Jacobi normalization: layernorm (re-inflates) vs none/rescale (contractive, σ(W_F)≤0.9).</div>
+            <select class="num-input" id="sw-fpNorm" onchange="syncSwitchesFromBoard()">
+              <option value="layernorm" selected>layernorm — standard LN (default)</option>
+              <option value="none">none — no LN, contractive W_FA/W_FB</option>
+              <option value="rescale">rescale — centered unit-ball contractive</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -976,6 +1013,7 @@ const DEFAULT_SWITCHES = {
   fpIters: 6,              // 0 | 1 | 2 | 6 | 12
   fpEps: 1e-4,             // 1e-3 | 1e-4 | 1e-5
   fpInject: 'off',         // off | on
+  fpNorm: 'layernorm',     // layernorm | none | rescale
   recordA: 'on',           // on | off
   recordB: 'on',           // on | off
   rbMode: 'causal',        // causal | prevrev | legacy
@@ -994,7 +1032,7 @@ const DEFAULT_SWITCHES = {
 
 const SWITCH_KEYS_ORDER = [
   'arch','dim','layers','chunk','lr','weights',
-  'relEmbed','coreA','coreB','innerFP','fpIters','fpInject',
+  'relEmbed','coreA','coreB','innerFP','fpIters','fpInject','fpNorm',
   'recordA','recordB','rbMode','frontierPresent','frontierHelix',
   'helix','helixRotation','helixRetention','thermo','lambda',
   'clipMode','phiClip'
@@ -1034,6 +1072,7 @@ function normalizeConfig(raw = {}) {
   c.coreA = _normOnOff(c.coreA, 'on');
   c.coreB = _normOnOff(c.coreB, 'on');
   c.fpInject = _normOnOff(c.fpInject, 'off');
+  c.fpNorm = String(c.fpNorm || 'layernorm').toLowerCase();
   c.recordA = _normOnOff(c.recordA, 'on');
   c.recordB = _normOnOff(c.recordB, 'on');
   c.frontierPresent = _normOnOff(c.frontierPresent, 'on');
@@ -1061,7 +1100,7 @@ function parseConfig(input, base = {}) {
   if (s.startsWith('{')) {
     try { return normalizeConfig(Object.assign({}, base, JSON.parse(s))); } catch (e) {}
   }
-  if (s.startsWith('L12:')) s = s.slice(4);
+  if (s.startsWith('L12:') || s.startsWith('L13:')) s = s.slice(4);
   const out = Object.assign({}, base);
   const parts = s.split(/[;,]+/);
   for (const part of parts) {
@@ -1211,22 +1250,89 @@ function layerNorm(x, gamma, beta, eps=1e-5, evalOnly=false) {
   return { out, cache: { xhat, invStd, n, mean } };
 }
 
+const _lnbPool = new Map();
 function layerNormBackward(grad, cache, gamma) {
   const { xhat, invStd, n } = cache;
-  const grad_xhat = new Float32Array(n);
-  const grad_gamma = new Float32Array(n);
-  const grad_beta = new Float32Array(n);
+  let p = _lnbPool.get(n);
+  if (!p) {
+    p = {
+      slot: 0,
+      gxhat: new Float32Array(n),
+      slots: [
+        { grad_x: new Float32Array(n), grad_gamma: new Float32Array(n), grad_beta: new Float32Array(n) },
+        { grad_x: new Float32Array(n), grad_gamma: new Float32Array(n), grad_beta: new Float32Array(n) }
+      ]
+    };
+    _lnbPool.set(n, p);
+  }
+  const s = p.slots[p.slot];
+  p.slot ^= 1;
+  const { grad_x, grad_gamma, grad_beta } = s;
+  const grad_xhat = p.gxhat;
   for (let i = 0; i < n; i++) {
-    grad_gamma[i] = grad[i] * xhat[i];
-    grad_beta[i] = grad[i];
-    grad_xhat[i] = grad[i] * gamma[i];
+    const gi = grad[i];
+    grad_gamma[i] = gi * xhat[i];
+    grad_beta[i] = gi;
+    grad_xhat[i] = gi * gamma[i];
   }
   let sum1 = 0, sum2 = 0;
   for (let i = 0; i < n; i++) { sum1 += grad_xhat[i]; sum2 += grad_xhat[i] * xhat[i]; }
-  const grad_x = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     grad_x[i] = invStd * (grad_xhat[i] - sum1/n - xhat[i]*sum2/n);
   }
+  return s;
+}
+
+/* Contractive centering normalization (fpNorm=rescale):
+   Centers x and divides by sqrt(1 + sum((x - mean)^2)) without LayerNorm's sqrt(d) re-inflation,
+   keeping ||xhat||_2 < 1 and Jacobian spectral norm <= ||gamma||_inf <= 1. */
+function rescaleNorm(x, gamma, beta, evalOnly=false) {
+  const n = x.length;
+  let mean = 0;
+  for (let i = 0; i < n; i++) mean += x[i];
+  mean /= n;
+  let sumSq = 0;
+  for (let i = 0; i < n; i++) {
+    const d = x[i] - mean;
+    sumSq += d * d;
+  }
+  const s = 1 / Math.sqrt(1 + sumSq);
+  const invSqrtN = 1 / Math.sqrt(n);
+  if (evalOnly) {
+    for (let i = 0; i < n; i++) x[i] = gamma[i] * ((x[i] - mean) * s) + beta[i] * invSqrtN;
+    return { out: x, cache: null };
+  }
+  const out = new Float32Array(n);
+  const xhat = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    xhat[i] = (x[i] - mean) * s;
+    out[i] = gamma[i] * xhat[i] + beta[i] * invSqrtN;
+  }
+  return { out, cache: { xhat, s, n } };
+}
+
+function rescaleNormBackward(grad, cache, gamma) {
+  const { xhat, s, n } = cache;
+  const invSqrtN = 1 / Math.sqrt(n);
+  const grad_gamma = new Float32Array(n);
+  const grad_beta = new Float32Array(n);
+  const grad_xhat = new Float32Array(n);
+  let c = 0;
+  for (let i = 0; i < n; i++) {
+    grad_gamma[i] = grad[i] * xhat[i];
+    grad_beta[i] = grad[i] * invSqrtN;
+    grad_xhat[i] = grad[i] * gamma[i];
+    c += grad_xhat[i] * xhat[i];
+  }
+  const u = new Float32Array(n);
+  let mean_u = 0;
+  for (let i = 0; i < n; i++) {
+    u[i] = s * (grad_xhat[i] - xhat[i] * c);
+    mean_u += u[i];
+  }
+  mean_u /= n;
+  const grad_x = new Float32Array(n);
+  for (let i = 0; i < n; i++) grad_x[i] = u[i] - mean_u;
   return { grad_x, grad_gamma, grad_beta };
 }
 
@@ -1295,6 +1401,30 @@ function spectralNormInit(W, dim, target=0.9) {
   }
 }
 
+/* Deterministic spectral-norm projection for fpNorm=none|rescale after optimizerStep */
+function spectralNormClip(W, dim, target=0.9) {
+  const v = new Float32Array(dim);
+  for (let i = 0; i < dim; i++) v[i] = Math.sin(i + 1);
+  let nv = l2norm(v);
+  for (let i = 0; i < dim; i++) v[i] /= nv + 1e-8;
+  let sigma = 1.0;
+  for (let it = 0; it < 10; it++) {
+    const Wv = matvec(W, v, dim, dim);
+    sigma = l2norm(Wv);
+    if (sigma < 1e-8) return;
+    const u = new Float32Array(dim);
+    for (let i = 0; i < dim; i++) u[i] = Wv[i] / sigma;
+    const WTu = matvecT(W, u, dim, dim);
+    const sWTu = l2norm(WTu);
+    for (let i = 0; i < dim; i++) v[i] = WTu[i] / (sWTu + 1e-8);
+  }
+  if (sigma > target) {
+    const s = target / sigma;
+    for (let i = 0; i < W.length; i++) W[i] *= s;
+    if (typeof invalidateTernaryCache === 'function') invalidateTernaryCache();
+  }
+}
+
 let LEARNS_TERNARY = true;
 const _I8 = typeof Int8Array !== 'undefined' ? Int8Array : Float32Array;
 const _WM = typeof WeakMap !== 'undefined' ? WeakMap : Map;
@@ -1302,45 +1432,62 @@ function ternaryScale(W) { let s = 0; for (let i = 0; i < W.length; i++) s += Ma
 let LEARNS_QVER = 0;
 const LEARNS_QCACHE = new _WM();
 function invalidateTernaryCache() { LEARNS_QVER++; }
-function ternaryQ(W) {
-  let c = LEARNS_QCACHE.get(W);
-  if (c && c.ver === LEARNS_QVER) return c;
+function ternaryQ(W, rows, cols) {
+  let c = W._qcache;
+  if (c && c.ver === LEARNS_QVER && (!rows || c.rows === rows)) return c;
+  const n = W.length;
   const scale = ternaryScale(W), thr = 0.5 * scale;
-  const q = (c && c.q.length === W.length) ? c.q : new _I8(W.length);
-  for (let i = 0; i < W.length; i++) { const w = W[i]; q[i] = w > thr ? 1 : (w < -thr ? -1 : 0); }
-  c = { ver: LEARNS_QVER, q, scale }; LEARNS_QCACHE.set(W, c); return c;
+  const q = (c && c.q.length === n) ? c.q : new _I8(n);
+  if (!rows) {
+    for (let i = 0; i < n; i++) { const w = W[i]; q[i] = w > thr ? 1 : (w < -thr ? -1 : 0); }
+    c = { ver: LEARNS_QVER, q, scale, rows: 0 };
+    W._qcache = c;
+    return c;
+  }
+  const posIdx = (c && c.posIdx && c.posIdx.length === n) ? c.posIdx : new Int32Array(n);
+  const negIdx = (c && c.negIdx && c.negIdx.length === n) ? c.negIdx : new Int32Array(n);
+  const rowPosStart = (c && c.rowPosStart && c.rowPosStart.length === rows + 1) ? c.rowPosStart : new Int32Array(rows + 1);
+  const rowNegStart = (c && c.rowNegStart && c.rowNegStart.length === rows + 1) ? c.rowNegStart : new Int32Array(rows + 1);
+  let pCount = 0, nCount = 0;
+  for (let i = 0; i < rows; i++) {
+    rowPosStart[i] = pCount;
+    rowNegStart[i] = nCount;
+    const base = i * cols;
+    for (let j = 0; j < cols; j++) {
+      const w = W[base + j];
+      if (w > thr) { q[base + j] = 1; posIdx[pCount++] = j; }
+      else if (w < -thr) { q[base + j] = -1; negIdx[nCount++] = j; }
+      else { q[base + j] = 0; }
+    }
+  }
+  rowPosStart[rows] = pCount;
+  rowNegStart[rows] = nCount;
+  c = { ver: LEARNS_QVER, q, scale, rows, posIdx, negIdx, rowPosStart, rowNegStart };
+  W._qcache = c;
+  return c;
 }
 function matvecTernary(W, x, rows, cols) {
   if (!LEARNS_TERNARY) return matvec(W, x, rows, cols);
-  const { q, scale } = ternaryQ(W), y = new Float32Array(rows);
-  const cols4 = cols - 3;
+  const c = (W._qcache && W._qcache.ver === LEARNS_QVER && W._qcache.rows === rows) ? W._qcache : ternaryQ(W, rows, cols);
+  const { scale, posIdx, negIdx, rowPosStart, rowNegStart } = c;
+  const y = new Float32Array(rows);
   for (let i = 0; i < rows; i++) {
-    let s = 0, base = i * cols, j = 0;
-    for (; j < cols4; j += 4) {
-      s += q[base + j] * x[j];
-      s += q[base + j + 1] * x[j + 1];
-      s += q[base + j + 2] * x[j + 2];
-      s += q[base + j + 3] * x[j + 3];
-    }
-    for (; j < cols; j++) s += q[base + j] * x[j];
+    let s = 0;
+    for (let p = rowPosStart[i], p1 = rowPosStart[i + 1]; p < p1; p++) s += x[posIdx[p]];
+    for (let n = rowNegStart[i], n1 = rowNegStart[i + 1]; n < n1; n++) s -= x[negIdx[n]];
     y[i] = s * scale;
   }
   return y;
 }
 function matvecTernaryT(W, g, rows, cols) {
   if (!LEARNS_TERNARY) return matvecT(W, g, rows, cols);
-  const { q, scale } = ternaryQ(W), out = new Float32Array(cols);
-  const cols4 = cols - 3;
+  const c = (W._qcache && W._qcache.ver === LEARNS_QVER && W._qcache.rows === rows) ? W._qcache : ternaryQ(W, rows, cols);
+  const { scale, posIdx, negIdx, rowPosStart, rowNegStart } = c;
+  const out = new Float32Array(cols);
   for (let i = 0; i < rows; i++) {
     const gi = g[i] * scale; if (gi === 0) continue;
-    const base = i * cols; let j = 0;
-    for (; j < cols4; j += 4) {
-      out[j] += q[base + j] * gi;
-      out[j + 1] += q[base + j + 1] * gi;
-      out[j + 2] += q[base + j + 2] * gi;
-      out[j + 3] += q[base + j + 3] * gi;
-    }
-    for (; j < cols; j++) out[j] += q[base + j] * gi;
+    for (let p = rowPosStart[i], p1 = rowPosStart[i + 1]; p < p1; p++) out[posIdx[p]] += gi;
+    for (let n = rowNegStart[i], n1 = rowNegStart[i + 1]; n < n1; n++) out[negIdx[n]] -= gi;
   }
   return out;
 }
@@ -1367,16 +1514,29 @@ function innerFPSolve(suffix_sig, W_A, ln_gamma, ln_beta, MAX_ITER, eps, dim, ev
   return { state: K, iters, steps };
 }
 
-/* Dyadic FP (Jacobi): K_A' = LN(tanh(W_FA·K_B [+a])), K_B' = LN(tanh(W_FB·K_A [+b])). All iterations cached. */
-function dyadicFPSolve(K_A_init, K_B_init, W_FA, W_FB, ln_A_gamma, ln_A_beta, ln_B_gamma, ln_B_beta, MAX_ITER, eps, injA, injB, evalOnly=false) {
+/* Dyadic FP (Jacobi): K_A' = Norm(tanh(W_FA·K_B [+a])), K_B' = Norm(tanh(W_FB·K_A [+b])) where Norm is layernorm|none|rescale. */
+function dyadicFPSolve(K_A_init, K_B_init, W_FA, W_FB, ln_A_gamma, ln_A_beta, ln_B_gamma, ln_B_beta, MAX_ITER, eps, injA, injB, evalOnly=false, fpNorm='layernorm') {
   const dim = K_A_init.length; let K_A = K_A_init.slice(), K_B = K_B_init.slice(); const steps = evalOnly ? null : [];
   let lastResidual = 0, iters = 0;
   for (let i = 0; i < MAX_ITER; i++) {
     const preA = matvec(W_FA, K_B, dim, dim), preB = matvec(W_FB, K_A, dim, dim);
     if (injA) for (let j = 0; j < dim; j++) { preA[j] += injA[j]; preB[j] += injB[j]; }
     const tA = tanh_v(preA), tB = tanh_v(preB);
-    const { out: KA, cache: cA } = layerNorm(tA, ln_A_gamma, ln_A_beta, 1e-5, evalOnly);
-    const { out: KB, cache: cB } = layerNorm(tB, ln_B_gamma, ln_B_beta, 1e-5, evalOnly);
+    let KA, cA = null, KB, cB = null;
+    if (fpNorm === 'none') {
+      KA = evalOnly ? tA : tA.slice();
+      KB = evalOnly ? tB : tB.slice();
+    } else if (fpNorm === 'rescale') {
+      const rA = rescaleNorm(tA, ln_A_gamma, ln_A_beta, evalOnly);
+      const rB = rescaleNorm(tB, ln_B_gamma, ln_B_beta, evalOnly);
+      KA = rA.out; cA = rA.cache;
+      KB = rB.out; cB = rB.cache;
+    } else {
+      const rA = layerNorm(tA, ln_A_gamma, ln_A_beta, 1e-5, evalOnly);
+      const rB = layerNorm(tB, ln_B_gamma, ln_B_beta, 1e-5, evalOnly);
+      KA = rA.out; cA = rA.cache;
+      KB = rB.out; cB = rB.cache;
+    }
     if (!evalOnly) steps.push({ K_A_in: K_A, K_B_in: K_B, tA, tB, cA, cB });
     iters++;
     const dA = l2diff(KA, K_A), dB = l2diff(KB, K_B);
@@ -1710,6 +1870,7 @@ class LEARNSModel {
     const innerFPMax = cfg.innerFP !== undefined ? Number(cfg.innerFP) : (cfg.innerFPMax !== undefined ? Number(cfg.innerFPMax) : 4);
     const fpEps = cfg.fpEps !== undefined ? Number(cfg.fpEps) : 1e-4;
     const inject = cfg.fpInject === 'on' || cfg.fpInject === true;
+    const fpNorm = String(cfg.fpNorm || 'layernorm').toLowerCase();
     const recAOn = cfg.recordA !== 'off' && cfg.recordA !== false;
     const recBOn = cfg.recordB !== 'off' && cfg.recordB !== false;
     const presentOn = cfg.frontierPresent !== undefined ? (cfg.frontierPresent !== 'off' && cfg.frontierPresent !== false) : true;
@@ -1724,7 +1885,7 @@ class LEARNSModel {
     const { tokenHistory } = state;
 
     const caches = {
-      layers: [], tokenId, inject,
+      layers: [], tokenId, inject, fpNorm,
       relOn, coreAOn, coreBOn, maxFPIter, innerFPMax, recAOn, recBOn,
       present: presentOn, frontierHelixOn, helixOn, helixRotMode, helixRetMode,
       useTernary: LEARNS_TERNARY
@@ -1780,7 +1941,7 @@ class LEARNSModel {
       for (let j = 0; j < dim; j++) { K_A_init[j] = gA[j] * a_t[j]; K_B_init[j] = gB[j] * b_t[j]; }
       const fp = dyadicFPSolve(K_A_init, K_B_init, this.layers_W_FA[l], this.layers_W_FB[l],
         this.layers_ln_fpA_gamma[l], this.layers_ln_fpA_beta[l], this.layers_ln_fpB_gamma[l], this.layers_ln_fpB_beta[l],
-        maxFPIter, fpEps, inject ? a_t : null, inject ? b_t : null, !!cfg.evalOnly);
+        maxFPIter, fpEps, inject ? a_t : null, inject ? b_t : null, !!cfg.evalOnly, fpNorm);
       const K_A = fp.K_A, K_B = fp.K_B;
       totalFPIters += fp.iters; totalFPAgree += fp.agree; totalFPRes += (fp.residual || 0);
       lc.K_A = K_A; lc.K_B = K_B; lc.fpSteps = fp.steps;
@@ -1819,8 +1980,8 @@ class LEARNSModel {
     caches.aAct = act_count ? a_act_sum / act_count : 0; caches.bAct = act_count ? b_act_sum / act_count : 0;
 
     // (4) DYADIC RECORD UPDATE
-    const S_A_start = (recAOn && !cfg.evalOnly) ? recordEntropy(R_A_prev) : 0;
-    const S_B_start = (recBOn && !cfg.evalOnly) ? recordEntropy(R_B_prev) : 0;
+    const S_A_start = (recAOn && !cfg.evalOnly && !cfg.skipDiag) ? recordEntropy(R_A_prev) : 0;
+    const S_B_start = (recBOn && !cfg.evalOnly && !cfg.skipDiag) ? recordEntropy(R_B_prev) : 0;
     let R_A_new, ln_recA_cache = null;
     if (recAOn) {
       const Ka = matvecTernary(this.W_rec_A, K_A_final, dim, dim);
@@ -1855,9 +2016,9 @@ class LEARNSModel {
       for (let i = 0; i < logits.length; i++) logits[i] += lp[i];
     }
 
-    const S_A_end = (recAOn && !cfg.evalOnly) ? recordEntropy(R_A_new) : 0;
-    const S_B_end = (recBOn && !cfg.evalOnly) ? recordEntropy(R_B_new) : 0;
-    const fEnt = cfg.evalOnly ? 0 : entropy(softmax(logits));
+    const S_A_end = (recAOn && !cfg.evalOnly && !cfg.skipDiag) ? recordEntropy(R_A_new) : 0;
+    const S_B_end = (recBOn && !cfg.evalOnly && !cfg.skipDiag) ? recordEntropy(R_B_new) : 0;
+    const fEnt = (cfg.evalOnly || cfg.skipDiag) ? 0 : entropy(softmax(logits));
     const newHistory = [...tokenHistory, tokenId];
     if (newHistory.length > this.K_hist) newHistory.shift();
 
@@ -1979,14 +2140,27 @@ class LEARNSModel {
 
       // dyadic FP — backprop through the iterations actually run
       const g_a = zeros(dim), g_b = zeros(dim);
+      const fpNorm = caches.fpNorm || 'layernorm';
       for (let i = lc.fpSteps.length - 1; i >= 0; i--) {
         const st = lc.fpSteps[i];
-        const bA = LNb(gKA, st.cA, this.layers_ln_fpA_gamma[l]);
-        acc(this.layers_ln_fpA_gamma_grad[l], bA.grad_gamma); acc(this.layers_ln_fpA_beta_grad[l], bA.grad_beta);
-        const bB = LNb(gKB, st.cB, this.layers_ln_fpB_gamma[l]);
-        acc(this.layers_ln_fpB_gamma_grad[l], bB.grad_gamma); acc(this.layers_ln_fpB_beta_grad[l], bB.grad_beta);
+        let gxA, gxB;
+        if (fpNorm === 'none') {
+          gxA = gKA; gxB = gKB;
+        } else if (fpNorm === 'rescale') {
+          const bA = rescaleNormBackward(gKA, st.cA, this.layers_ln_fpA_gamma[l]);
+          acc(this.layers_ln_fpA_gamma_grad[l], bA.grad_gamma); acc(this.layers_ln_fpA_beta_grad[l], bA.grad_beta);
+          const bB = rescaleNormBackward(gKB, st.cB, this.layers_ln_fpB_gamma[l]);
+          acc(this.layers_ln_fpB_gamma_grad[l], bB.grad_gamma); acc(this.layers_ln_fpB_beta_grad[l], bB.grad_beta);
+          gxA = bA.grad_x; gxB = bB.grad_x;
+        } else {
+          const bA = LNb(gKA, st.cA, this.layers_ln_fpA_gamma[l]);
+          acc(this.layers_ln_fpA_gamma_grad[l], bA.grad_gamma); acc(this.layers_ln_fpA_beta_grad[l], bA.grad_beta);
+          const bB = LNb(gKB, st.cB, this.layers_ln_fpB_gamma[l]);
+          acc(this.layers_ln_fpB_gamma_grad[l], bB.grad_gamma); acc(this.layers_ln_fpB_beta_grad[l], bB.grad_beta);
+          gxA = bA.grad_x; gxB = bB.grad_x;
+        }
         const gpA = new Float32Array(dim), gpB = new Float32Array(dim);
-        for (let j = 0; j < dim; j++) { gpA[j] = bA.grad_x[j] * (1 - st.tA[j] * st.tA[j]); gpB[j] = bB.grad_x[j] * (1 - st.tB[j] * st.tB[j]); }
+        for (let j = 0; j < dim; j++) { gpA[j] = gxA[j] * (1 - st.tA[j] * st.tA[j]); gpB[j] = gxB[j] * (1 - st.tB[j] * st.tB[j]); }
         outer(this.layers_W_FA_grad[l], st.K_B_in, gpA, dim, dim);
         outer(this.layers_W_FB_grad[l], st.K_A_in, gpB, dim, dim);
         if (caches.inject) { if (coreAOn) acc(g_a, gpA); if (coreBOn) acc(g_b, gpB); }
@@ -2748,6 +2922,41 @@ class KneserNeyModel {
   getTernaryStats() { return { neg: 0, zero: 1, pos: 0 }; }
   getAlignmentDiag() { return { rA_bias: 0, rB_bias: 0, divergence: 0, cxA_bias: 0, cxB_bias: 0, skewCos: 0 }; }
 
+  fitSegments(segments) {
+    const V = this.vocab, maxOrder = this.order;
+    if (maxOrder === 1) {
+      const cnt = new Float64Array(V);
+      let nObs = 0;
+      for (const seg of segments) {
+        for (let i = 1; i < seg.length; i++) { cnt[seg[i]]++; nObs++; }
+      }
+      const tot = nObs + V;
+      let nz = 0;
+      for (let w = 0; w < V; w++) {
+        if (cnt[w] > 0) nz++;
+        this.pUni[w] = (cnt[w] + 1) / tot;
+      }
+      this.nonZeroEntries = nz;
+      this.fitted = true;
+      return;
+    }
+    const rawMaps = Array.from({ length: maxOrder + 1 }, () => new Map());
+    for (const seg of segments) {
+      for (let i = 1; i < seg.length; i++) {
+        const w = seg[i];
+        for (let m = 1; m <= maxOrder; m++) {
+          if (i < m - 1) continue;
+          let ctxKey = '';
+          for (let j = i - (m - 1); j < i; j++) ctxKey += (j > i - (m - 1) ? ',' : '') + seg[j];
+          let cm = rawMaps[m].get(ctxKey);
+          if (!cm) { cm = new Map(); rawMaps[m].set(ctxKey, cm); }
+          cm.set(w, (cm.get(w) || 0) + 1);
+        }
+      }
+    }
+    this._finalizeKNFromRawMaps(rawMaps);
+  }
+
   fit(trainToks) {
     const V = this.vocab, maxOrder = this.order;
     if (maxOrder === 1) {
@@ -2776,6 +2985,11 @@ class KneserNeyModel {
         cm.set(w, (cm.get(w) || 0) + 1);
       }
     }
+    this._finalizeKNFromRawMaps(rawMaps);
+  }
+
+  _finalizeKNFromRawMaps(rawMaps) {
+    const V = this.vocab, maxOrder = this.order;
 
     const countMaps = Array.from({ length: maxOrder + 1 }, () => new Map());
     countMaps[maxOrder] = rawMaps[maxOrder];
@@ -3036,6 +3250,18 @@ function optimizerStep(model, step, lr, cfg = {}) {
     adamwStep(model.layers_rho[l], model.layers_rho_grad[l], model.layers_rho_m1[l], model.layers_rho_m2[l], step, lr, 0.9, 0.999, 1e-8, 0);
     adamwStep(model.layers_W_prog[l], model.layers_W_prog_grad[l], model.layers_W_prog_m1[l], model.layers_W_prog_m2[l], step, lr);
     adamwStep(model.layers_W_px[l], model.layers_W_px_grad[l], model.layers_W_px_m1[l], model.layers_W_px_m2[l], step, lr);
+    const fpNormMode = String(cfg.fpNorm || (model.cfg && model.cfg.fpNorm) || (typeof App !== 'undefined' && App.fpNorm) || 'layernorm').toLowerCase();
+    if (fpNormMode === 'none' || fpNormMode === 'rescale') {
+      spectralNormClip(model.layers_W_FA[l], model.dim, 0.9);
+      spectralNormClip(model.layers_W_FB[l], model.dim, 0.9);
+      if (fpNormMode === 'rescale') {
+        const gA = model.layers_ln_fpA_gamma[l], gB = model.layers_ln_fpB_gamma[l];
+        for (let i = 0; i < gA.length; i++) {
+          if (gA[i] > 1.0) gA[i] = 1.0; else if (gA[i] < -1.0) gA[i] = -1.0;
+          if (gB[i] > 1.0) gB[i] = 1.0; else if (gB[i] < -1.0) gB[i] = -1.0;
+        }
+      }
+    }
   }
   invalidateTernaryCache();
 }
@@ -3111,8 +3337,9 @@ function scoutBackwardPass(tokens, model, cfg) {
   const scoutTargets = new Array(len);
   R_B_at[len] = scoutState.R_B.slice();
 
+  const scoutCfg = Object.assign({}, cfg, { skipDiag: true });
   for (let t = len - 1; t >= 0; t--) {
-    const { logits, state: ns, caches } = model.forward(tokens[t + 1], scoutState, cfg);
+    const { logits, state: ns, caches } = model.forward(tokens[t + 1], scoutState, scoutCfg);
     scoutCaches[t] = caches;
     scoutLogits[t] = logits;
     scoutTargets[t] = tokens[t];
@@ -3277,6 +3504,46 @@ async function trainChunk(tokens, chunkCfg) {
 /* ── v0.0009: controls, data split, validation, leak probe ─────────────── */
 
 /* Tier 1.1: Deterministic 80% train / 10% validation / 10% test contiguous split */
+/* v0.0013: Deterministic full-split stride chunk schedule & data-matched segment builder */
+function buildStrideStarts(trainLen, chunkSize, steps, seed) {
+  const numChunks = Math.max(1, Math.floor((trainLen - 1) / chunkSize));
+  const out = new Int32Array(steps);
+  const perm = new Int32Array(numChunks);
+  let epoch = -1;
+  for (let s = 0; s < steps; s++) {
+    const ep = Math.floor(s / numChunks);
+    const idx = s % numChunks;
+    if (ep !== epoch) {
+      epoch = ep;
+      for (let k = 0; k < numChunks; k++) perm[k] = k * chunkSize;
+      const epRng = mulberry32(((seed >>> 0) ^ Math.imul(ep + 1, 0x9E3779B9)) >>> 0);
+      for (let i = numChunks - 1; i > 0; i--) {
+        const j = Math.floor(epRng() * (i + 1));
+        const tmp = perm[i]; perm[i] = perm[j]; perm[j] = tmp;
+      }
+    }
+    out[s] = perm[idx];
+  }
+  return out;
+}
+
+function buildSeenSegments(trainTokens, starts, chunkSize) {
+  const segs = [];
+  let segStart = null, segEnd = null;
+  for (let s = 0; s < starts.length; s++) {
+    const st = starts[s];
+    const en = Math.min(trainTokens.length, st + chunkSize + 1);
+    if (segStart !== null && st === segEnd - 1) {
+      segEnd = en;
+    } else {
+      if (segStart !== null) segs.push(trainTokens.subarray ? trainTokens.subarray(segStart, segEnd) : trainTokens.slice(segStart, segEnd));
+      segStart = st; segEnd = en;
+    }
+  }
+  if (segStart !== null) segs.push(trainTokens.subarray ? trainTokens.subarray(segStart, segEnd) : trainTokens.slice(segStart, segEnd));
+  return segs;
+}
+
 function splitCorpus80_10_10(allTokens) {
   const N = allTokens.length;
   const nTrain = Math.floor(N * 0.8);
@@ -3642,12 +3909,20 @@ if (typeof self !== 'undefined' && typeof document === 'undefined' && typeof sel
         return;
       }
 
+      const streamMode = msg.streamMode || cfg.stream || 'stride';
+      const strideStarts = streamMode === 'stride' ? buildStrideStarts(App.corpus.length, chunkSize, Math.max(totalSteps, App.step + 1), App.seed) : null;
       let lastStepTime = Date.now();
       while (_wRunning && App.step < totalSteps) {
         if (_wPaused) { await yieldToMain(); lastStepTime = Date.now(); continue; }
-        const start = (App.step * chunkSize) % Math.max(1, App.corpus.length - chunkSize - 2);
+        const start = (streamMode === 'stride' && strideStarts && App.step < strideStarts.length)
+          ? strideStarts[App.step]
+          : (App.step * chunkSize) % Math.max(1, App.corpus.length - chunkSize - 2);
         const chunk = App.corpus.subarray(start, start + chunkSize + 1);
         cfg.contiguous = (prevStart !== undefined && start === prevStart + chunkSize);
+        if (!cfg.contiguous) {
+          App.trainState = App.model.getEmptyState();
+          App.prevScoutRB = null;
+        }
         prevStart = start;
         if (chunk.length < 2) { App.step++; continue; }
 
@@ -3772,6 +4047,7 @@ function fpCfgNow() {
     coreA: g('sw-coreA') ? g('sw-coreA').value : 'on',
     coreB: g('sw-coreB') ? g('sw-coreB').value : 'on',
     fpInject: g('sw-fpInject') ? g('sw-fpInject').value : (g('cfg-fpinject') && g('cfg-fpinject').checked ? 'on' : 'off'),
+    fpNorm: g('sw-fpNorm') ? g('sw-fpNorm').value : 'layernorm',
     recordA: g('sw-recordA') ? g('sw-recordA').value : 'on',
     recordB: g('sw-recordB') ? g('sw-recordB').value : 'on',
     rbMode: g('sw-rbMode') ? g('sw-rbMode').value : (g('cfg-rbmode') ? g('cfg-rbmode').value : 'causal'),
@@ -3837,6 +4113,7 @@ function applyConfigToUI(cfg) {
   if (g('sw-innerFP')) g('sw-innerFP').value = String(c.innerFP);
   if (g('sw-fpIters')) g('sw-fpIters').value = String(c.fpIters);
   if (g('sw-fpInject')) g('sw-fpInject').value = c.fpInject;
+  if (g('sw-fpNorm')) g('sw-fpNorm').value = c.fpNorm || 'layernorm';
   if (g('cfg-fpinject')) g('cfg-fpinject').checked = (c.fpInject === 'on');
   if (g('sw-recordA')) g('sw-recordA').value = c.recordA;
   if (g('sw-recordB')) g('sw-recordB').value = c.recordB;
@@ -3912,6 +4189,7 @@ function readExperimentControls() {
   const cfg = fpCfgNow();
   App.rbMode = cfg.rbMode;
   App.shuffleMode = g('cfg-shuffle').value;
+  App.streamMode = g('cfg-stream') ? g('cfg-stream').value : 'stride';
   App.valFrac = Math.max(0, Math.min(0.5, parseFloat(g('cfg-valfrac').value) || 0.1));
   App.valEvery = Math.max(1, parseInt(g('cfg-valevery').value) || 50);
   App.phiClip = cfg.phiClip !== 'off';
@@ -4216,13 +4494,21 @@ async function trainLoop() {
     return;
   }
 
+  const streamMode = App.streamMode || 'stride';
+  const strideStarts = streamMode === 'stride' ? buildStrideStarts(App.corpus.length, chunkSize, Math.max(totalSteps, App.step + 1), App.seed) : null;
   while (App.training && App.step < totalSteps) {
     if (App.paused) { await yieldToMain(); continue; }
 
     const corpus = App.corpus;
-    const start = (App.step * chunkSize) % Math.max(1, corpus.length - chunkSize - 2);
+    const start = (streamMode === 'stride' && strideStarts && App.step < strideStarts.length)
+      ? strideStarts[App.step]
+      : (App.step * chunkSize) % Math.max(1, corpus.length - chunkSize - 2);
     const chunk = corpus.slice(start, start + chunkSize + 1);
     cfg.contiguous = (App._prevStart !== undefined && start === App._prevStart + chunkSize);
+    if (!cfg.contiguous) {
+      App.trainState = App.model.getEmptyState();
+      App.prevScoutRB = null;
+    }
     App._prevStart = start;
     if (chunk.length < 2) { App.step++; continue; }
 
@@ -4435,7 +4721,7 @@ function exportModel(silent=false) {
   const skipOptim = document.getElementById('chk-save-optim') && document.getElementById('chk-save-optim').checked;
   const ser = serializeModelWeights(m, App.trainState, !skipOptim);
   const data = {
-    version: '0.0012',
+    version: '0.0013',
     step: App.step,
     codeHash: App.codeHash || '',
     corpusHash: App.corpusHash || '',
@@ -4454,7 +4740,7 @@ function exportModel(silent=false) {
   const a = document.createElement('a');
   a.href = url;
   const exportName = document.getElementById('cfg-export-name').value.trim();
-  const baseName = exportName || 'learns-v0.0012';
+  const baseName = exportName || 'learns-v0.0013';
   a.download = `${baseName}-step${App.step}.learns`;
   if (!silent) a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -4468,8 +4754,8 @@ function importModel(input) {
   reader.onload = (e) => {
     try {
       const data = JSON.parse(e.target.result);
-      if (!['0.0005','0.0006','0.0007','0.0008','0.0009','0.0010','0.0011','0.0012'].includes(data.version)) {
-        showToast('Incompatible .learns version ' + data.version + ' (reads v0.0005 to v0.0012)');
+      if (!['0.0005','0.0006','0.0007','0.0008','0.0009','0.0010','0.0011','0.0012','0.0013'].includes(data.version)) {
+        showToast('Incompatible .learns version ' + data.version + ' (reads v0.0005 to v0.0013)');
         return;
       }
       Tokenizer.deserialize(data.tokenizer);
@@ -4668,6 +4954,7 @@ function startTraining() {
       valEvery: App.valEvery,
       ckptEvery,
       shuffleMode: App.shuffleMode,
+      streamMode: App.streamMode || 'stride',
       corpusAll: App.corpusAll,
       tokenizerData: Tokenizer.trained ? Tokenizer.serialize() : null,
       modelLoaded: wasLoaded,

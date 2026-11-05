@@ -1,53 +1,54 @@
-# LEARNS v0.0012 — Switchboard Reference (`SWITCHES.md`)
+# LEARNS v0.0013 — Tier 2 Switchboard Reference (`SWITCHES.md`)
 
-Every paper-derived component and numerical policy in LEARNS v0.0012 is exposed as a switch in the **Switchboard** UI panel, the `.learns` save format, the `L12:...` settings string, `tests/run.js`, `tests/gradcheck.js`, and `tests/optimizer-coverage.js`.
+Every paper-derived component in LEARNS is controlled by an orthogonal switch exposed in three places:
+1. **Browser Switchboard UI** (`SWITCHBOARD` tab in `index.html`, plus the `Settings String` box in the left panel).
+2. **Compact Settings String** (`L12:arch=learns;dim=32;...`, accepted by `parseConfig()` and emitted by `serializeConfig()`).
+3. **Headless CLI** (`node tests/run.js --config "key=val;..." --stream=stride|head --ngramData=all|seen`, `node tests/gradcheck.js key=val`, `node tests/optimizer-coverage.js key=val`).
 
-When all switches are left at their defaults, LEARNS v0.0012 is **bit-for-bit identical** to LEARNS v0.0011 (`CODE_HASH: 0xfe2cf657`, `CORPUS_HASH: 0x39c84ca9`). Disabling any component removes its computational path cleanly (via an exact zero or identity bypass with matching analytical backward pass) rather than merely freezing its weights.
+With all switches at their default values and `--stream=head`, LEARNS v0.0013 is **bit-for-bit identical to v0.0011 and v0.0012** on the same seed, config, and corpus.
+
+---
 
 ## Complete Switch Table
 
-| Group | Switch Key | Default | Options | Theory Paper Tested | What It Controls & Clean Bypass Behavior | Active Param Delta (`dim=32, L=2, V=256`) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **A. Relational Embedding** | `relEmbed` | `on` | `on \| off` | *It's All Relative* | **`on`**: $e_t = \text{embed}(x_t) + Q(W_{\text{rel}})\,R_{\text{comb},t-1}$. **`off`**: $e_t = \text{embed}(x_t)$ alone; $W_{\text{rel}}$ is bypassed in forward and backward. | $-1,024$ (`53,376`) |
-| **B. Temporal Turing Core** | `coreA` | `on` | `on \| off` | *The Electromagnetic Node* | **`on`**: Component A runs inner fixed-point solver over `suffix_sig` ($a_t = \text{InnerFP}(\text{suffix\_sig})$). **`off`**: $a_t = 0$, $K_{A,\text{init}} = 0$, cross-gates $W_{gA}, W_{gB}$ bypassed ($g_B = 1$). | $-10,240$ (`44,160`) |
-| **B. Temporal Turing Core** | `coreB` | `on` | `on \| off` | *The Electromagnetic Node* | **`on`**: Component B computes $b_t = \tanh(Q(W_B)[h, R_{\text{comb},t-1}])$. **`off`**: $b_t = 0$, $K_{B,\text{init}} = 0$, cross-gates $W_{gA}, W_{gB}$ bypassed ($g_A = 1$). | $-8,192$ (`46,208`) |
-| **B. Temporal Turing Core** | `innerFP` | `4` | `2..8` (`2 \| 3 \| 4 \| 6 \| 8`) | *The Electromagnetic Node* | Maximum iterations of Component A's inner fixed-point loop $K^{(i+1)} = \text{LN}(\tanh(Q(W_A)[K^{(i)}, \text{sfx}]))$. | $0$ (`54,400`) |
-| **C. Dyadic Fixed Point** | `fpIters` | `6` | `0 \| 1 \| 2 \| 6 \| 12` | *K-H Fixed Point Theorem* | Number of Jacobi iterations between $K_A$ and $K_B$. **`0`**: no dyadic iteration ($K_A = K_{A,\text{init}}, K_B = K_{B,\text{init}}$; single feed-forward pass, $W_{FA}, W_{FB}, \text{LN}_{\text{fpA/B}}$ bypassed). | $-4,096$ at `0` (`50,304`) |
-| **C. Dyadic Fixed Point** | `fpInject` | `off` | `off \| on` | *K-H Fixed Point Theorem* | **`off`**: autonomous Jacobi map $K_A' = \text{LN}(\tanh(W_{FA}K_B))$. **`on`**: DEQ-style input injection $K_A' = \text{LN}(\tanh(W_{FA}K_B + a_t))$, $K_B' = \text{LN}(\tanh(W_{FB}K_A + b_t))$. | $0$ (`54,400`) |
-| **D. Records & Frontier** | `recordA` | `on` | `on \| off` | *It's Time To Toss The Dice* | **`on`**: forward record $R_A$ updated via $W_{\text{rec\_A}}, W_{\text{cross\_A}}, \text{LN}_{\text{recA}}$. **`off`**: $R_A = 0$; $W_{\text{rec\_A}}, W_{\text{cross\_A}}, W_{\text{cross\_B}}$ bypassed. | $-3,072$ (`51,328`) |
-| **D. Records & Frontier** | `recordB` | `on` | `on \| off` | *It's Time To Toss The Dice* | **`on`**: partner record $R_B$ updated via $W_{\text{rec\_B}}, W_{\text{cross\_B}}, \text{LN}_{\text{recB}}$ plus reverse-LM `scoutBackwardPass`. **`off`**: $R_B = 0$ and reverse scout pass disabled. | $-3,072$ (`51,328`) |
-| **D. Records & Frontier** | `rbMode` | `causal` | `causal \| prevrev \| legacy` | *It's Time To Toss The Dice* | **`causal`**: $R_B$ carried forward across tokens/chunks. **`prevrev`**: $R_B$ re-seeded at each contiguous chunk boundary from a right-to-left reading of the previous chunk. **`legacy`**: leaky future scout (diagnostic only). | $0$ (`54,400`) |
-| **D. Records & Frontier** | `frontierPresent` | `on` | `on \| off` | *It's Time To Toss The Dice* | **`on`**: $\text{logits} = Q(W_{\text{frontier}})R_{\text{comb}} + Q(W_{\text{present}})h_{\text{frontier}}$. **`off`**: record-only frontier ($\text{logits} = Q(W_{\text{frontier}})R_{\text{comb}}$; $W_{\text{present}}$ bypassed). | $-8,192$ (`46,208`) |
-| **D. Records & Frontier** | `frontierHelix` | `on` | `on \| off` | *It's Time To Toss The Dice* | **`on`**: $W_{\text{present}}$ reads full helical state $h = \sigma(\rho)\odot G(\theta)h_{\text{prev}} + P$. **`off`**: strips helical recurrence from frontier readout so $W_{\text{present}}$ reads only instantaneous progression $P$. | $0$ (`54,400`) |
-| **E. Helical State** | `helix` | `on` | `on \| off` | *The Drill of Entropy* | **`on`**: working state spirals across time via $h = \sigma(\rho)\odot G(\theta)h_{\text{prev}} + P$. **`off`**: disables helical recurrence ($\theta, \rho$ bypassed, $h_{\text{prev}} = 0$, $h = P$). | $-128$ (`54,272`) |
-| **E. Helical State** | `helixRotation` | `learned` | `learned \| none` | *The Drill of Entropy* | **`learned`**: pairwise Givens rotations $G(\theta^{(l)})$ applied to $h$. **`none`**: identity rotation $G = I$ (exponential decay without rotation; $\theta^{(l)}$ bypassed). | $-64$ (`54,336`) |
-| **E. Helical State** | `helixRetention` | `learned` | `learned \| fixed \| none` | *The Drill of Entropy* | **`learned`**: trainable per-dim decay $\sigma(\rho^{(l)})$ initialized at $\rho = 2.2$. **`fixed`**: constant $\sigma(2.2) \approx 0.90025$ ($\rho$ not stepped). **`none`**: $\sigma \equiv 1$ (v0.0009 integrate-everything behavior). | $-64$ (`54,336`) |
-| **F. Thermodynamic Loss** | `thermo` | `hinge` | `off \| linear \| hinge` | *The Past Is Still The Future* | **`hinge`**: $\mathcal{L}_{\text{thermo}} = \lambda \max(0, -\Delta S)$. **`linear`**: $\mathcal{L}_{\text{thermo}} = -\lambda \Delta S$. **`off`**: $\mathcal{L}_{\text{thermo}} = 0$ (no entropy gradient injected into records). | $0$ (`54,400`) |
-| **F. Thermodynamic Loss** | `lambda` | `0.05` | `number >= 0` | *The Past Is Still The Future* | Scaling coefficient $\lambda$ on thermodynamic entropy loss $\mathcal{L}_{\text{thermo}}$. Setting `lambda=0` disables thermodynamic loss. | $0$ (`54,400`) |
-| **G. Numerics** | `weights` | `ternary` | `ternary \| float32` | *BitNet b1.58 STE* | **`ternary`**: quantizes large matrices to $\{-1, 0, +1\} \times \text{mean}|W|$ in forward/backward via Straight-Through Estimator. **`float32`**: full-precision IEEE-754 float32 weights. | $0$ (`54,400`) |
-| **G. Numerics** | `clipMode` | `global` | `global \| per_group` | *Honest Lab Tier 1.6* | **`global`**: clips all parameter tensors jointly by global $L_2$ norm $\le 1.0$. **`per_group`**: clips each parameter tensor individually to $L_2$ norm $\le 1.0$, isolating LayerNorm-beta gradient spikes. | $0$ (`54,400`) |
-| **G. Numerics** | `phiClip` | `on` | `on \| off` | *The Electromagnetic Node* | **`on`**: clamps $W_{gA}$ gradients to $\pm \varphi$ and $W_{gB}$ gradients to $\pm 1/\varphi$ after norm clipping. **`off`**: clamps both to $\pm 1.0$. Proven inert under norm clipping $\le 1.0$. | $0$ (`54,400`) |
+| Switch | Allowed Values | Default | Component / Paper | What `off` / Alternative Values Do | Active Parameter Count Change (`dim=d, layers=L, vocab=V`) |
+|---|---|---|---|---|---|
+| `arch` | `learns \| gru \| transformer \| unigram \| bigram \| trigram \| 5gram` | `learns` | Architecture selector | Selects LEARNS or one of the Tier 3 baselines in the same training/evaluation harness. | See `BASELINES.md` |
+| `relEmbed` | `on \| off` | `on` | **(1) Relational Embedding** (*It's All Relative*) | `on`: $\mathbf{e}_t = \mathbf{W}_{\text{embed}}[x_t] + Q(\mathbf{W}_{\text{rel}})\mathbf{R}_{\text{comb},t-1}$. `off`: $\mathbf{e}_t = \mathbf{W}_{\text{embed}}[x_t]$; skips $\mathbf{W}_{\text{rel}}$ forward and backward. | $-d^2$ when `off` (`-1,024` at $d=32$) |
+| `coreA` | `on \| off` | `on` | **(2) Temporal Turing Core A** (*The Electromagnetic Node*) | `on`: runs inner fixed point `innerFPSolve` over suffix signal $\mathbf{s}_t$. `off`: sets $\mathbf{a}_t = \mathbf{0}$ and cross-gate $\mathbf{g}_B = \mathbf{1}$. | $-L(2d^2 + 2d^2)$ when `off` (skips $\mathbf{W}_A, \mathbf{W}_{gA}, \mathbf{W}_{gB}$) |
+| `coreB` | `on \| off` | `on` | **(2) Temporal Turing Core B** (*The Electromagnetic Node*) | `on`: $\mathbf{b}_t = \tanh(Q(\mathbf{W}_B)[\mathbf{h}_{t-1}; \mathbf{R}_{\text{comb},t-1}])$. `off`: sets $\mathbf{b}_t = \mathbf{0}$ and cross-gate $\mathbf{g}_A = \mathbf{1}$. | $-L(2d^2 + 2d^2)$ when `off` (skips $\mathbf{W}_B, \mathbf{W}_{gA}, \mathbf{W}_{gB}$) |
+| `innerFP` | `2 .. 8` | `4` | **(2) Component A Inner FP** (*The Electromagnetic Node*) | Maximum iterations of $\mathbf{K}^{(i+1)} = \text{LN}(\tanh(Q(\mathbf{W}_A)[\mathbf{K}^{(i)}; \mathbf{s}_t]))$ from $\mathbf{K}^{(0)}=\mathbf{0}$. | `0` (shared $\mathbf{W}_A$ across iterations) |
+| `fpIters` | `0 \| 1 \| 2 \| 6 \| 12` | `6` | **(3) Dyadic Fixed Point** (*K-H Fixed Point Theorem*) | Number of Jacobi iterations for $(\mathbf{K}_A, \mathbf{K}_B)$. `0` bypasses the Jacobi loop ($\mathbf{K}_A = \mathbf{g}_A \odot \mathbf{a}_t, \mathbf{K}_B = \mathbf{g}_B \odot \mathbf{b}_t$), running ~18% faster per step. | $-2Ld^2$ when `fpIters=0` (skips $\mathbf{W}_{FA}, \mathbf{W}_{FB}$) |
+| `fpInject` | `off \| on` | `off` | **(3) Dyadic Fixed Point** (*K-H Fixed Point Theorem*) | `off`: autonomous map $\mathbf{K}_A' = \text{Norm}(\tanh(\mathbf{W}_{FA}\mathbf{K}_B))$. `on`: DEQ-style input injection $\mathbf{K}_A' = \text{Norm}(\tanh(\mathbf{W}_{FA}\mathbf{K}_B + \mathbf{a}_t))$. | `0` |
+| `fpNorm` | `layernorm \| none \| rescale` | `layernorm` | **(3) Dyadic Fixed Point Contractivity** (*K-H Fixed Point Theorem*, v0.0013) | Controls normalization inside `dyadicFPSolve`:<br>• `layernorm`: standard LayerNorm (re-inflates vectors to radius $\sqrt{d}$ every step, preventing convergence).<br>• `none`: removes LayerNorm inside the Jacobi loop ($\mathbf{K}_A' = \tanh(\mathbf{W}_{FA}\mathbf{K}_B [+\mathbf{a}_t])$) and enforces spectral norm $\sigma(\mathbf{W}_{FA}), \sigma(\mathbf{W}_{FB}) \le 0.9$ via deterministic power iteration after each `optimizerStep`.<br>• `rescale`: centers $\tilde{\mathbf{x}} = \mathbf{x} - \mu$ and scales by $s = 1/\sqrt{1 + \|\tilde{\mathbf{x}}\|_2^2}$ without the $\sqrt{d}$ re-inflation ($\mathbf{y} = \boldsymbol{\gamma} \odot (s\tilde{\mathbf{x}}) + \boldsymbol{\beta}/\sqrt{d}$), enforcing $\|\boldsymbol{\gamma}\|_\infty \le 1$ and $\sigma(\mathbf{W}_{FA}), \sigma(\mathbf{W}_{FB}) \le 0.9$ so the centered Jacobi map is strictly contractive ($\text{Lip} \le 0.9 < 1$). | `0` (`none` leaves `ln_fpA/B` unused with 0 gradient) |
+| `fpEps` | `1e-3 \| 1e-4 \| 1e-5` | `1e-4` | **(2 & 3) Fixed-Point Tolerance** | Early-stopping L2 residual threshold $\|\mathbf{K}^{(i+1)} - \mathbf{K}^{(i)}\|_2 < \varepsilon$. | `0` |
+| `recordA` | `on \| off` | `on` | **(4) Record / Frontier Split** (*It's Time To Toss The Dice*) | `off`: clamps $\mathbf{R}_A = \mathbf{0}$ for all $t$, zeroes $\mathbf{W}_{\text{rec},A}$ and cross-coupling $\mathbf{W}_{\text{cross},B}$. | $-d^2$ (plus $-2d^2$ cross terms) |
+| `recordB` | `on \| off` | `on` | **(4) Record / Frontier Split** (*It's Time To Toss The Dice*) | `off`: clamps $\mathbf{R}_B = \mathbf{0}$ for all $t$, skips the reverse-LM backward scout pass, and zeroes $\mathbf{W}_{\text{rec},B}$ and cross terms. | $-d^2$ (plus $-2d^2$ cross terms) |
+| `rbMode` | `causal \| prevrev \| legacy` | `causal` | **(4) Partner Record Seeding** (*It's Time To Toss The Dice*) | `causal`: carries $\mathbf{R}_B$ forward across tokens. `prevrev`: seeds $\mathbf{R}_B$ at chunk start from `scoutBackwardPass` on the previous contiguous chunk (causal, leak-free). `legacy`: injects future scout $\mathbf{R}_B$ (leaks target; diagnostic only). | `0` |
+| `frontierPresent` | `on \| off` | `on` | **(4) Frontier Readout** (*It's Time To Toss The Dice*) | `on`: $\text{logits}_t = Q(\mathbf{W}_{\text{frontier}})\mathbf{R}_{\text{comb},t} + Q(\mathbf{W}_{\text{present}})\mathbf{h}_{\text{frontier},t}$. `off`: record-only readout $Q(\mathbf{W}_{\text{frontier}})\mathbf{R}_{\text{comb},t}$. | $-Vd$ when `off` (`-8,192` at $d=32, V=256$) |
+| `frontierHelix` | `on \| off` | `on` | **(4 & 5) Frontier Helix Path** | `on`: $\mathbf{h}_{\text{frontier},t} = \mathbf{h}_t^{(L)}$ (full damped rotating spiral). `off`: $\mathbf{h}_{\text{frontier},t} = \mathbf{P}_t^{(L)}$ (memoryless top-layer progression vector). | `0` |
+| `helix` | `on \| off` | `on` | **(5) Helical State** (*The Drill of Entropy*) | `on`: $\mathbf{h}_t = \sigma(\boldsymbol{\rho}) \odot G(\boldsymbol{\theta})\mathbf{h}_{t-1} + \mathbf{P}_t$. `off`: zeroes recurrent carry ($\mathbf{h}_t = \mathbf{P}_t$). | $-L(d + d)$ when `off` (skips $\boldsymbol{\theta}, \boldsymbol{\rho}$) |
+| `helixRotation` | `learned \| none` | `learned` | **(5) Givens Rotation** (*The Drill of Entropy*) | `learned`: rotates pair $(2i, 2i+1)$ by learned $\theta_i$. `none`: identity rotation $G(\mathbf{0}) = \mathbf{I}$ (decay only). | $-Ld$ when `none` |
+| `helixRetention` | `learned \| fixed \| none` | `learned` | **(5) Helical Decay** (*The Drill of Entropy*) | `learned`: per-dim $\sigma(\rho_j)$ initialized at $\rho_j=2.2$. `fixed`: constant $\sigma(2.2) \approx 0.90025$. `none`: $\sigma = 1$ (undamped integration, v0.0009 style). | $-Ld$ when `fixed` or `none` |
+| `thermo` | `hinge \| linear \| off` | `hinge` | **(6) Thermodynamic Loss** (*The Past Is Still The Future*) | `hinge`: $\mathcal{L}_{\text{thermo}} = \lambda \max(0, -\Delta S_{\text{chunk}})$. `linear`: $-\lambda \Delta S_{\text{chunk}}$. `off`: $0$. | `0` |
+| `lambda` | $\ge 0$ (`float`) | `0.05` | **(6) Thermodynamic Weight** | Multiplier $\lambda$ on the chunk entropy penalty. | `0` |
+| `weights` | `ternary \| float32` | `ternary` | **BitNet b1.58 Quantization** | `ternary`: $Q(\mathbf{W}) = \text{scale} \cdot \text{round\_clip}(\mathbf{W}/\text{scale}, -1, 1)$ with $\text{scale} = \text{mean}|\mathbf{W}|$ and straight-through estimator (STE). `float32`: unquantized dense matrices. | `0` (same parameter tensors; 1.58 bits vs 32 bits per weight) |
+| `clipMode` | `global \| per_group` | `global` | **Gradient Norm Clipping** | `global`: clips joint L2 norm of all gradient tensors to $1.0$. `per_group`: clips each parameter tensor's L2 norm independently to $1.0$, isolating LayerNorm-bias gradient spikes. | `0` |
+| `phiClip` | `on \| off` | `on` | **Gate Gradient Clamp** | `on`: clamps $\mathbf{W}_{gA,\text{grad}} \in [-\varphi, \varphi]$ and $\mathbf{W}_{gB,\text{grad}} \in [-1/\varphi, 1/\varphi]$ after norm clipping. Inert when `clipMode` caps L2 norm to $1.0$ ($1/\varphi \approx 0.618$). | `0` |
 
-## Deterministic Settings Strings (`L12:...`)
+---
 
-Every configuration serializes deterministically via `serializeConfig(cfg)` and parses via `parseConfig(str)`:
+## Stream & Data-Matching Flags (`tests/run.js`, v0.0013)
 
-```text
-L12:arch=learns;dim=32;lr=0.032;helix=off;thermo=hinge
-```
+| CLI Flag | Allowed Values | Default | Behaviour |
+|---|---|---|---|
+| `--stream` | `stride \| head` | `stride` | `stride`: deterministic per-epoch permutation of all $\lfloor(N_{\text{train}}-1)/\text{chunk}\rfloor = 7,030$ non-overlapping 64-byte chunk start positions (`buildStrideStarts`), seeded from `(seed, epoch)` via Mulberry32 without perturbing weight initialization. Resets recurrent state (`App.trainState = model.getEmptyState(); App.prevScoutRB = null;`) whenever consecutive chunks are not contiguous (`start !== prevStart + chunkSize`), identically across `LEARNS`, `GRU`, and `Transformer`.<br>`head`: exact v0.0012 sequential chunk start `start = (step * chunkSize) % (N_train - chunkSize - 2)`. |
+| `--ngramData` | `all \| seen` | `all` | `all`: fits Kneser–Ney 1/2/3/5-gram tables on the entire 449,923-byte training split.<br>`seen`: builds the exact contiguous segments visited by the neural stream at the given `--steps`, `--stream`, and `--seed` (`buildSeenSegments`) and fits Kneser–Ney via `fitSegments()` on those exact target bytes without crossing non-adjacent chunk boundaries. |
+| `--curve` | integer (e.g. `500`) | `0` (off) | Records causal validation loss (`valLoss`, `valBpb`) over the full validation split every `N` steps and at the final step in `record.valCurve`. |
+| `--final` | boolean flag | `false` | Evaluates causal loss on the held-out 10% test split (`testLoss`, `testBpb`). Omitted during learning-rate sweeps so hyperparameters are chosen strictly on validation. |
 
-Both `tests/run.js`, `tests/gradcheck.js`, `tests/optimizer-coverage.js`, and the browser **Switchboard** panel accept either full `L12:...` strings or shorthand `key=value;key2=value2` strings:
+---
 
-```bash
-# Verify exact analytical vs finite-difference gradients for any switch:
-node tests/gradcheck.js helix=off
-node tests/gradcheck.js fpIters=0
-node tests/gradcheck.js --all
+## Verification
 
-# Verify optimizer parameter coverage for any switch:
-node tests/optimizer-coverage.js relEmbed=off
-node tests/optimizer-coverage.js --all
-
-# Run headless training and evaluation with any switch string:
-node tests/run.js --corpus corpus.txt --arch learns --config "L12:arch=learns;dim=32;lr=0.032;helix=off" --seed 3 --steps 150 --final
-```
+All 36 gradient configurations (`node tests/gradcheck.js --all`) and all 37 optimizer-coverage configurations (`node tests/optimizer-coverage.js --all`) pass with `ALL OK`.

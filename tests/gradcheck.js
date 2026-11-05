@@ -1,8 +1,8 @@
-// Full finite-difference gradient check of LEARNS v0.0012 (all Tier 2 switches) and Tier 3 baselines (GRU, Transformer) over a 3-step sequence with BPTT.
+// Full finite-difference gradient check of LEARNS v0.0013 (all Tier 2 switches including fpNorm=layernorm|none|rescale) and Tier 3 baselines (GRU, Transformer) over a 3-step sequence with BPTT.
 // Usage:
 //   node tests/gradcheck.js                     (default LEARNS)
 //   node tests/gradcheck.js inject              (with FP input injection)
-//   node tests/gradcheck.js helix=off           (any Tier 2 switch or L12:... string)
+//   node tests/gradcheck.js fpNorm=rescale      (any Tier 2 switch or L12:... string)
 //   node tests/gradcheck.js arch=gru            (GRU baseline)
 //   node tests/gradcheck.js arch=transformer    (Transformer baseline)
 //   node tests/gradcheck.js --all               (runs default, inject, every Tier 2 switch, and every baseline)
@@ -27,7 +27,6 @@ function runGradcheckFor(specStr, verbose = true) {
   if (!String(specStr).includes('innerFP=')) parsed.innerFP = 3;
   parsed.fpEps = 1e-14;
 
-  const isTernaryCheck = String(specStr).includes('weights=ternary');
   // In float mode (default for gradcheck), check all weights; if weights=ternary is explicitly passed, check in float mode so STE weights are differentiable
   parsed.weights = 'float32';
 
@@ -190,6 +189,7 @@ if (args.includes('--all')) {
     '', 'inject',
     'relEmbed=off', 'coreA=off', 'coreB=off', 'innerFP=2', 'innerFP=8',
     'fpIters=0', 'fpIters=1', 'fpIters=2', 'fpIters=6', 'fpIters=12', 'fpInject=on',
+    'fpNorm=layernorm', 'fpNorm=none', 'fpNorm=rescale', 'fpNorm=none;fpInject=on', 'fpNorm=rescale;fpInject=on',
     'recordA=off', 'recordB=off', 'rbMode=prevrev',
     'frontierPresent=off', 'frontierHelix=off',
     'helix=off', 'helixRotation=none', 'helixRetention=fixed', 'helixRetention=none',
