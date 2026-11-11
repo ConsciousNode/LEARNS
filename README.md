@@ -1,5 +1,7 @@
 # LEARNS v0.0015: "The Partner Record" (`README.md`)
 
+> **Audited 2026-11-11 (Kehai Interim).** Clean. The leak test's legacy positive control fails as it must. gradcheck passes 45/45, optimizer coverage 46/46, and legacy reproduction is bit for bit. Every table regenerates verbatim from `results.jsonl`. Reused runs keep honest provenance. Independent reruns of lookback=16 (seed 3) and B0 (seed 7) match bit for bit. See `AUDIT-v0.0015.md`.
+
 **LEARNS** (*Logical Entropic Arrow Recursive Neuro-Symbolic Architecture*) is a zero-dependency, single-file browser language model (`index.html`) built by ConsciousNode SoftWorks. Every component is derived from one of the studio's six theory papers, and every component can be switched on or off from the browser Switchboard or the headless Node CLI (`tests/run.js`).
 
 ---
