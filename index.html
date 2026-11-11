@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEARNS v0.0014: Signal and Noise — ConsciousNode SoftWorks</title>
+<title>LEARNS v0.0015: The Partner Record — ConsciousNode SoftWorks</title>
 <!--
-  LEARNS v0.0014 — SIGNAL AND NOISE
+  LEARNS v0.0015 — THE PARTNER RECORD
   Logical Entropic Arrow Recursive Neuro-Symbolic Architecture
   ConsciousNode SoftWorks — November 2026
 
@@ -18,7 +18,33 @@
     6. Thermodynamic Loss         — from The Past Is Still The Future
 
   Authors: Kham Kizer · Kehai Interim (spec)
-  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009) · Kehai Interim (v0.0010, v0.0011, v0.0012, v0.0013, v0.0014)
+  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009) · Kehai Interim (v0.0010, v0.0011, v0.0012, v0.0013, v0.0014, v0.0015)
+
+  v0.0015 (Kehai Interim + Kham, Nov 10 2026) — THE PARTNER RECORD.
+  Investigates Component 4 (It's Time To Toss The Dice: the dyadic record split R_A / R_B) after
+  v0.0014 showed that removing the reverse-chunk scout loss (scoutScale=0) improves ternary test
+  loss by -0.123 nats at 1,000 steps and -0.147 nats at a full pass:
+  - TIER 1 BASELINE & CAUSALITY LEAK SUITE:
+    * Promotes scoutScale=0 to the v0.0015 default (selected on 5-seed validation in v0.0014 Tier 4).
+      Explicit scoutScale=0.5 preserves v0.0014 and v0.0011/v0.0012 bit-for-bit reproduction.
+    * Adds tests/leak.js: verifies strict causal invariance (perturbing any byte after t leaves all
+      logits at or before t bit-identical, max|Delta logit| === 0) on both random weights and trained
+      checkpoints across every rbMode (causal, prevrev, lookback with lookback=16 and 64, recordB=off),
+      while confirming rbMode=legacy fails as a positive control.
+  - TIER 2 PARTNER RECORD STUDY (What Should R_B Be?):
+    * B0: default (scoutScale=0, rbMode=causal, recordB=on)
+    * A1: recordB=off (tests whether R_B contributes when the reverse-LM loss is off)
+    * A2: rbMode=prevrev (seeds R_B at chunk boundaries from a backward read of the previous chunk)
+    * A3: rbMode=lookback;lookback=16 and lookback=64 (Kham's causal rolling look-back: at each token t,
+      computes R_{B,t} by running the R_B recurrence backwards over x_t, x_{t-1}, ..., x_{t-N+1} from a
+      zero state, clamped at chunk/stream start, with exact BPTT through the backward read)
+    * A4: scoutScale=0.5;scoutHead=separate (trains the reverse-chunk scout objective on its own readout
+      head W_frontier_scout / W_present_scout so reverse gradients train R_B and the core without
+      touching the forward readout W_frontier / W_present)
+    * Tracks R_B diagnostics (||R_A||_2, ||R_B||_2, and cos(R_A, R_B)) over training and validation.
+  - Standing audit rules enforced: reused runs keep their original codeHash + reusedFrom (marked with †
+    in tables.js), and EXPERIMENT_REPORT.md separates Measured: facts from Hypothesis: explanations.
+  - format: writes 0.0015; import reads 0.0005-0.0015.
 
   v0.0014 (Kehai Interim + Kham, Nov 4 2026) — SIGNAL AND NOISE.
   Addresses the three audit findings from AUDIT-v0.0013.md (ternary checkpoint jitter of ~0.01-0.02 nats,
@@ -369,8 +395,8 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
 <body>
 
 <div id="header">
-  <h1>LEARNS v0.0014</h1>
-  <span class="sub">Signal and Noise — ConsciousNode SoftWorks</span>
+  <h1>LEARNS v0.0015</h1>
+  <span class="sub">The Partner Record — ConsciousNode SoftWorks</span>
   <div id="token-pill" style="display:flex;align-items:center;gap:10px;font-size:11px;color:var(--text-dim);margin-left:10px;flex-wrap:wrap;">
     <span>CODE <b id="tc-codehash" style="color:var(--accent);">—</b></span>
     <span>CORPUS_H <b id="tc-corpushash" style="color:var(--accent);">—</b></span>
@@ -524,6 +550,7 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
         <label>R_B mode</label>
         <select class="num-input" id="cfg-rbmode" onchange="syncSwitchesFromLeft()">
           <option value="causal" selected>causal (carry — leak-free)</option>
+          <option value="lookback">lookback (rolling backward past window — leak-free)</option>
           <option value="prevrev">prevrev (reversed prev chunk — leak-free)</option>
           <option value="legacy">legacy (injects future — LEAKS target)</option>
         </select>
@@ -826,19 +853,36 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
           </div>
           <div class="sw-item">
             <label>rbMode <span>Default: causal</span></label>
-            <div class="sw-desc">How R_B is carried or seeded across chunks.</div>
+            <div class="sw-desc">How R_B is updated or seeded (causal carry, rolling backward lookback, prevrev, or legacy).</div>
             <select class="num-input" id="sw-rbMode" onchange="syncSwitchesFromBoard()">
               <option value="causal" selected>causal — carry forward (default)</option>
+              <option value="lookback">lookback — rolling backward past window (v0.0015)</option>
               <option value="prevrev">prevrev — seed from reversed prev chunk</option>
               <option value="legacy">legacy — future scout (leaks target)</option>
             </select>
           </div>
           <div class="sw-item">
-            <label>scoutScale <span>Default: 0.5</span></label>
-            <div class="sw-desc">Reverse-chunk auxiliary gradient weight (0 = keep causal R_B without reverse readout grads).</div>
+            <label>lookback <span>Default: 16</span></label>
+            <div class="sw-desc">Look-back window N for rbMode=lookback (runs R_B backwards over x_t..x_{t-N+1}).</div>
+            <select class="num-input" id="sw-lookback" onchange="syncSwitchesFromBoard()">
+              <option value="16" selected>16 tokens (default)</option>
+              <option value="64">64 tokens (full chunk)</option>
+            </select>
+          </div>
+          <div class="sw-item">
+            <label>scoutScale <span>Default: 0 (v0.0015)</span></label>
+            <div class="sw-desc">Reverse-chunk auxiliary gradient weight (0 = default; 0.5 = reverse-LM scout active).</div>
             <select class="num-input" id="sw-scoutScale" onchange="syncSwitchesFromBoard()">
-              <option value="0.5" selected>0.5 — reverse scout gradients active (default)</option>
-              <option value="0">0 — causal R_B only, no reverse readout grads</option>
+              <option value="0" selected>0 — causal R_B only, no reverse readout grads (default)</option>
+              <option value="0.5">0.5 — reverse scout gradients active (v0.0011–v0.0014)</option>
+            </select>
+          </div>
+          <div class="sw-item">
+            <label>scoutHead <span>Default: shared</span></label>
+            <div class="sw-desc">Readout head used by reverse scout when scoutScale &gt; 0 (shared vs separate head).</div>
+            <select class="num-input" id="sw-scoutHead" onchange="syncSwitchesFromBoard()">
+              <option value="shared" selected>shared — share W_frontier / W_present (default)</option>
+              <option value="separate">separate — dedicated W_frontier_scout / W_present_scout</option>
             </select>
           </div>
           <div class="sw-item">
@@ -1065,11 +1109,13 @@ const DEFAULT_SWITCHES = {
   fpInject: 'on',          // on | off (v0.0014 validation-selected default with fpNorm=rescale)
   fpNorm: 'rescale',       // rescale | layernorm | none (v0.0014 stable default: rescale)
   helixState: 'shared',    // shared | per_layer
-  scoutScale: 0.5,         // 0.5 | 0
+  scoutScale: 0,           // 0 | 0.5 (v0.0015 default: 0, selected by v0.0014 5-seed Tier 4 result)
+  scoutHead: 'shared',     // shared | separate
+  lookback: 16,            // lookback window N for rbMode=lookback (e.g. 16 | 64)
   ema: 'off',              // off | on
   recordA: 'on',           // on | off
   recordB: 'on',           // on | off
-  rbMode: 'causal',        // causal | prevrev | legacy
+  rbMode: 'causal',        // causal | prevrev | lookback | legacy
   frontierPresent: 'on',   // on | off
   frontierHelix: 'on',     // on | off
   helix: 'on',             // on | off
@@ -1086,7 +1132,7 @@ const DEFAULT_SWITCHES = {
 const SWITCH_KEYS_ORDER = [
   'arch','dim','layers','chunk','lr','weights',
   'relEmbed','coreA','coreB','innerFP','fpIters','fpInject','fpNorm',
-  'recordA','recordB','rbMode','scoutScale','frontierPresent','frontierHelix',
+  'recordA','recordB','rbMode','lookback','scoutScale','scoutHead','frontierPresent','frontierHelix',
   'helix','helixRotation','helixRetention','helixState','thermo','lambda',
   'clipMode','phiClip','ema'
 ];
@@ -1127,7 +1173,9 @@ function normalizeConfig(raw = {}) {
   c.fpInject = _normOnOff(c.fpInject, 'on');
   c.fpNorm = String(c.fpNorm || 'rescale').toLowerCase();
   c.helixState = String(c.helixState || 'shared').toLowerCase();
-  c.scoutScale = c.scoutScale !== undefined ? Number(c.scoutScale) : 0.5;
+  c.scoutScale = (c.scoutScale !== undefined && c.scoutScale !== '') ? Number(c.scoutScale) : 0;
+  c.scoutHead = String(c.scoutHead || 'shared').toLowerCase();
+  c.lookback = Number(c.lookback !== undefined ? c.lookback : 16);
   c.ema = _normOnOff(c.ema, 'off');
   c.recordA = _normOnOff(c.recordA, 'on');
   c.recordB = _normOnOff(c.recordB, 'on');
@@ -1156,7 +1204,7 @@ function parseConfig(input, base = {}) {
   if (s.startsWith('{')) {
     try { return normalizeConfig(Object.assign({}, base, JSON.parse(s))); } catch (e) {}
   }
-  if (s.startsWith('L12:') || s.startsWith('L13:') || s.startsWith('L14:')) s = s.slice(4);
+  if (/^L1[2-9]:/.test(s)) s = s.slice(4);
   const out = Object.assign({}, base);
   const parts = s.split(/[;,]+/);
   for (const part of parts) {
@@ -1178,6 +1226,12 @@ function serializeConfig(cfg = {}, compact = true) {
   const c = normalizeConfig(cfg);
   const pairs = [];
   for (const k of SWITCH_KEYS_ORDER) {
+    if (k === 'lookback') {
+      if (c.rbMode === 'lookback' || (!compact && c.lookback !== DEFAULT_SWITCHES.lookback)) {
+        pairs.push(`lookback=${c.lookback}`);
+      }
+      continue;
+    }
     if (compact && k !== 'dim' && k !== 'arch' && c[k] === DEFAULT_SWITCHES[k]) continue;
     pairs.push(`${k}=${c[k]}`);
   }
@@ -1879,6 +1933,14 @@ class LEARNSModel {
     this.W_present = randn(vocab * dim, scale * 0.5);
     this.W_present_grad = zeros(vocab * dim);
     this.W_present_m1 = zeros(vocab*dim); this.W_present_m2 = zeros(vocab*dim);
+    if (cfg.scoutHead === 'separate') {
+      this.W_frontier_scout = randn(vocab * dim, scale * 0.5);
+      this.W_frontier_scout_grad = zeros(vocab * dim);
+      this.W_frontier_scout_m1 = zeros(vocab * dim); this.W_frontier_scout_m2 = zeros(vocab * dim);
+      this.W_present_scout = randn(vocab * dim, scale * 0.5);
+      this.W_present_scout_grad = zeros(vocab * dim);
+      this.W_present_scout_m1 = zeros(vocab * dim); this.W_present_scout_m2 = zeros(vocab * dim);
+    }
   }
 
   getParamCount(cfgOverride) {
@@ -1902,6 +1964,10 @@ class LEARNSModel {
     if (recAOn && recBOn) n += 2 * dim * dim; // W_cross_A, W_cross_B
     if (recAOn || recBOn) n += dim * vocab; // W_frontier
     if (presOn) n += dim * vocab; // W_present
+    if (recBOn && c.scoutHead === 'separate' && Number(c.scoutScale) > 0) {
+      if (recAOn || recBOn) n += dim * vocab; // W_frontier_scout
+      if (presOn) n += dim * vocab; // W_present_scout
+    }
     if (retOn) n += dim * numLayers; // rho
     for (let l = 0; l < numLayers; l++) {
       if (coreAOn) n += 2 * dim * dim; // W_A
@@ -2150,6 +2216,8 @@ class LEARNSModel {
       }
     }
 
+    const rbMode = cfg.rbMode || 'causal';
+    const lookbackN = Math.max(1, Number(cfg.lookback) || 16);
     const K_A_final = ev.KA0, K_B_final = ev.KB0;
     const Ka = ev.tmpD1, cx = ev.tmpD2;
     if (recAOn) {
@@ -2161,10 +2229,30 @@ class LEARNSModel {
       Ka.fill(0);
     }
     if (recBOn) {
-      matvecTernaryInto(this.W_rec_B, K_B_final, dim, dim, ev.a_t);
-      if (recAOn) matvecTernaryInto(this.W_cross_B, R_A, dim, dim, cx); else cx.fill(0);
-      for (let j = 0; j < dim; j++) R_B[j] = R_B[j] + ev.a_t[j] + cx[j];
-      layerNorm(R_B, this.ln_recB_gamma, this.ln_recB_beta, 1e-5, true);
+      if (rbMode === 'lookback' && !cfg.isScout) {
+        const seenLen = tokenHistory.length + 1;
+        const M = Math.min(lookbackN, seenLen);
+        if (recAOn) matvecTernaryInto(this.W_cross_B, R_A, dim, dim, cx); else cx.fill(0);
+        R_B.fill(0);
+        const u_k = ev.b_t;
+        for (let k = 0; k < M; k++) {
+          const tok_k = (k === 0) ? tokenId : tokenHistory[tokenHistory.length - k];
+          const embBase = tok_k * dim;
+          if (k === 0) {
+            for (let j = 0; j < dim; j++) u_k[j] = this.W_embed[embBase + j] + K_B_final[j];
+          } else {
+            for (let j = 0; j < dim; j++) u_k[j] = this.W_embed[embBase + j];
+          }
+          matvecTernaryInto(this.W_rec_B, u_k, dim, dim, ev.a_t);
+          for (let j = 0; j < dim; j++) R_B[j] = R_B[j] + ev.a_t[j] + cx[j];
+          layerNorm(R_B, this.ln_recB_gamma, this.ln_recB_beta, 1e-5, true);
+        }
+      } else {
+        matvecTernaryInto(this.W_rec_B, K_B_final, dim, dim, ev.a_t);
+        if (recAOn) matvecTernaryInto(this.W_cross_B, R_A, dim, dim, cx); else cx.fill(0);
+        for (let j = 0; j < dim; j++) R_B[j] = R_B[j] + ev.a_t[j] + cx[j];
+        layerNorm(R_B, this.ln_recB_gamma, this.ln_recB_beta, 1e-5, true);
+      }
     } else {
       R_B.fill(0);
     }
@@ -2173,21 +2261,34 @@ class LEARNSModel {
 
     const R_comb_new = ev.R_comb_new;
     for (let j = 0; j < dim; j++) R_comb_new[j] = 0.5 * (R_A[j] + R_B[j]);
+    const useScoutHead = !!(cfg.useScoutHead && this.W_frontier_scout);
+    const W_front = useScoutHead ? this.W_frontier_scout : this.W_frontier;
+    const W_pres = useScoutHead ? this.W_present_scout : this.W_present;
     const logits = ev.logits;
     if (recAOn || recBOn) {
-      matvecTernaryInto(this.W_frontier, R_comb_new, vocab, dim, logits);
+      matvecTernaryInto(W_front, R_comb_new, vocab, dim, logits);
     } else {
       logits.fill(0);
     }
     if (presentOn) {
       const h_f = frontierHelixOn ? h : ev.P;
-      matvecTernaryInto(this.W_present, h_f, vocab, dim, ev.lp);
+      matvecTernaryInto(W_pres, h_f, vocab, dim, ev.lp);
       for (let i = 0; i < vocab; i++) logits[i] += ev.lp[i];
     }
 
+    const maxHist = rbMode === 'lookback' ? Math.max(this.K_hist, lookbackN) : this.K_hist;
     tokenHistory.push(tokenId);
-    if (tokenHistory.length > this.K_hist) tokenHistory.shift();
+    if (tokenHistory.length > maxHist) tokenHistory.shift();
 
+    let normASq = 0, normBSq = 0, dotAB = 0;
+    for (let j = 0; j < dim; j++) {
+      const ra = R_A[j], rb = R_B[j];
+      normASq += ra * ra; normBSq += rb * rb; dotAB += ra * rb;
+    }
+    const rANorm = Math.sqrt(normASq), rBNorm = Math.sqrt(normBSq);
+    ev.diag.rANorm = rANorm;
+    ev.diag.rBNorm = rBNorm;
+    ev.diag.rArBCos = (rANorm > 1e-12 && rBNorm > 1e-12) ? (dotAB / (rANorm * rBNorm)) : 0;
     ev.diag.fpItersAvg = totalFPIters / numLayers;
     ev.diag.fpResidualAvg = totalFPRes / numLayers;
     LEARNS_TERNARY = prevTernary;
@@ -2337,34 +2438,75 @@ class LEARNSModel {
       R_A_new = zeros(dim);
     }
 
-    let R_B_new, ln_recB_cache = null;
+    const rbMode = cfg.rbMode || 'causal';
+    const lookbackN = Math.max(1, Number(cfg.lookback) || 16);
+    let R_B_new, ln_recB_cache = null, lookbackSteps = null;
     if (recBOn) {
-      const Kb = matvecTernary(this.W_rec_B, K_B_final, dim, dim);
-      const cxB = recAOn ? matvecTernary(this.W_cross_B, R_A_prev, dim, dim) : zeros(dim);
-      const R_B_sum = new Float32Array(dim); for (let j = 0; j < dim; j++) R_B_sum[j] = R_B_prev[j] + Kb[j] + cxB[j];
-      const resB = layerNorm(R_B_sum, this.ln_recB_gamma, this.ln_recB_beta, 1e-5, !!cfg.evalOnly);
-      R_B_new = resB.out; ln_recB_cache = resB.cache;
+      if (rbMode === 'lookback' && !cfg.isScout) {
+        const seenLen = tokenHistory.length + 1;
+        const M = Math.min(lookbackN, seenLen);
+        const cxB = recAOn ? matvecTernary(this.W_cross_B, R_A_prev, dim, dim) : zeros(dim);
+        let rB = zeros(dim);
+        lookbackSteps = [];
+        for (let k = 0; k < M; k++) {
+          const tok_k = (k === 0) ? tokenId : tokenHistory[tokenHistory.length - k];
+          const u_k = new Float32Array(dim);
+          const embBase = tok_k * dim;
+          if (k === 0) {
+            for (let j = 0; j < dim; j++) u_k[j] = this.W_embed[embBase + j] + K_B_final[j];
+          } else {
+            for (let j = 0; j < dim; j++) u_k[j] = this.W_embed[embBase + j];
+          }
+          const Kb_k = matvecTernary(this.W_rec_B, u_k, dim, dim);
+          const sum_k = new Float32Array(dim);
+          for (let j = 0; j < dim; j++) sum_k[j] = rB[j] + Kb_k[j] + cxB[j];
+          const resB = layerNorm(sum_k, this.ln_recB_gamma, this.ln_recB_beta, 1e-5, !!cfg.evalOnly);
+          lookbackSteps.push({ tok_k, u_k, cache: resB.cache });
+          rB = resB.out;
+        }
+        R_B_new = rB;
+      } else {
+        const Kb = matvecTernary(this.W_rec_B, K_B_final, dim, dim);
+        const cxB = recAOn ? matvecTernary(this.W_cross_B, R_A_prev, dim, dim) : zeros(dim);
+        const R_B_sum = new Float32Array(dim); for (let j = 0; j < dim; j++) R_B_sum[j] = R_B_prev[j] + Kb[j] + cxB[j];
+        const resB = layerNorm(R_B_sum, this.ln_recB_gamma, this.ln_recB_beta, 1e-5, !!cfg.evalOnly);
+        R_B_new = resB.out; ln_recB_cache = resB.cache;
+      }
     } else {
       R_B_new = zeros(dim);
     }
 
     caches.ln_recA_cache = ln_recA_cache; caches.ln_recB_cache = ln_recB_cache;
+    caches.lookbackSteps = lookbackSteps;
     caches.R_A_new = R_A_new; caches.R_B_new = R_B_new;
     const R_combined_new = new Float32Array(dim);
     for (let j = 0; j < dim; j++) R_combined_new[j] = 0.5 * (R_A_new[j] + R_B_new[j]);
     caches.R_combined_new = R_combined_new;
 
-    const logits = (recAOn || recBOn) ? matvecTernary(this.W_frontier, R_combined_new, this.vocab, dim) : zeros(this.vocab);
+    const useScoutHead = !!(cfg.useScoutHead && this.W_frontier_scout);
+    caches.useScoutHead = useScoutHead;
+    const W_front = useScoutHead ? this.W_frontier_scout : this.W_frontier;
+    const W_pres = useScoutHead ? this.W_present_scout : this.W_present;
+    const logits = (recAOn || recBOn) ? matvecTernary(W_front, R_combined_new, this.vocab, dim) : zeros(this.vocab);
     if (caches.present) {
-      const lp = matvecTernary(this.W_present, caches.h_frontier, this.vocab, dim);
+      const lp = matvecTernary(W_pres, caches.h_frontier, this.vocab, dim);
       for (let i = 0; i < logits.length; i++) logits[i] += lp[i];
     }
+
+    let normASq = 0, normBSq = 0, dotAB = 0;
+    for (let j = 0; j < dim; j++) {
+      const ra = R_A_new[j], rb = R_B_new[j];
+      normASq += ra * ra; normBSq += rb * rb; dotAB += ra * rb;
+    }
+    const rANorm = Math.sqrt(normASq), rBNorm = Math.sqrt(normBSq);
+    const rArBCos = (rANorm > 1e-12 && rBNorm > 1e-12) ? (dotAB / (rANorm * rBNorm)) : 0;
 
     const S_A_end = (recAOn && !cfg.evalOnly && !cfg.skipDiag) ? recordEntropy(R_A_new) : 0;
     const S_B_end = (recBOn && !cfg.evalOnly && !cfg.skipDiag) ? recordEntropy(R_B_new) : 0;
     const fEnt = (cfg.evalOnly || cfg.skipDiag) ? 0 : entropy(softmax(logits));
+    const maxHist = rbMode === 'lookback' ? Math.max(this.K_hist, lookbackN) : this.K_hist;
     const newHistory = [...tokenHistory, tokenId];
-    if (newHistory.length > this.K_hist) newHistory.shift();
+    if (newHistory.length > maxHist) newHistory.shift();
 
     LEARNS_TERNARY = prevTernary;
     return {
@@ -2375,6 +2517,7 @@ class LEARNSModel {
         fpItersAvg: caches.fpItersAvg, fpAgreeAvg: caches.fpAgreeAvg, fpResidualAvg: caches.fpResidualAvg,
         aSymItersAvg: caches.aSymItersAvg,
         rAEntropy: S_A_end, rBEntropy: S_B_end, fEntropy: fEnt,
+        rANorm, rBNorm, rArBCos,
         aAct: caches.aAct, bAct: caches.bAct, dSA: S_A_end - S_A_start, dSB: S_B_end - S_B_start
       }
     };
@@ -2390,10 +2533,16 @@ class LEARNSModel {
     const { relOn, coreAOn, coreBOn, recAOn, recBOn, present, frontierHelixOn, helixOn, helixRotMode, helixRetMode } = caches;
 
     // FRONTIER
+    const useScoutHead = !!(caches.useScoutHead && this.W_frontier_scout);
+    const W_front = useScoutHead ? this.W_frontier_scout : this.W_frontier;
+    const W_front_grad = useScoutHead ? this.W_frontier_scout_grad : this.W_frontier_grad;
+    const W_pres = useScoutHead ? this.W_present_scout : this.W_present;
+    const W_pres_grad = useScoutHead ? this.W_present_scout_grad : this.W_present_grad;
+
     const gRA_new = zeros(dim), gRB_new = zeros(dim);
     if (grad_logits && (recAOn || recBOn)) {
-      outer(this.W_frontier_grad, caches.R_combined_new, grad_logits, vocab, dim);
-      const gRc = matvecTernaryT(this.W_frontier, grad_logits, vocab, dim);
+      outer(W_front_grad, caches.R_combined_new, grad_logits, vocab, dim);
+      const gRc = matvecTernaryT(W_front, grad_logits, vocab, dim);
       for (let j = 0; j < dim; j++) {
         if (recAOn) gRA_new[j] += 0.5 * gRc[j];
         if (recBOn) gRB_new[j] += 0.5 * gRc[j];
@@ -2420,15 +2569,37 @@ class LEARNSModel {
       }
     }
     if (recBOn) {
-      const lnB = LNb(gRB_new, caches.ln_recB_cache, this.ln_recB_gamma);
-      acc(this.ln_recB_gamma_grad, lnB.grad_gamma); acc(this.ln_recB_beta_grad, lnB.grad_beta);
-      const gRB_sum = lnB.grad_x;
-      acc(grad_R_B_prev, gRB_sum);
-      outer(this.W_rec_B_grad, caches.K_B_final, gRB_sum, dim, dim);
-      gK_B_rec = matvecTernaryT(this.W_rec_B, gRB_sum, dim, dim);
-      if (recAOn) {
-        outer(this.W_cross_B_grad, caches.R_A_prev, gRB_sum, dim, dim);
-        acc(grad_R_A_prev, matvecTernaryT(this.W_cross_B, gRB_sum, dim, dim));
+      if (caches.lookbackSteps) {
+        let g_rB = gRB_new.slice();
+        const g_cxB_total = zeros(dim);
+        for (let k = caches.lookbackSteps.length - 1; k >= 0; k--) {
+          const st = caches.lookbackSteps[k];
+          const lnB = LNb(g_rB, st.cache, this.ln_recB_gamma);
+          acc(this.ln_recB_gamma_grad, lnB.grad_gamma); acc(this.ln_recB_beta_grad, lnB.grad_beta);
+          const g_sum = lnB.grad_x;
+          g_rB = g_sum;
+          if (recAOn) acc(g_cxB_total, g_sum);
+          outer(this.W_rec_B_grad, st.u_k, g_sum, dim, dim);
+          const g_uk = matvecTernaryT(this.W_rec_B, g_sum, dim, dim);
+          const embBase = st.tok_k * dim;
+          for (let j = 0; j < dim; j++) this.W_embed_grad[embBase + j] += g_uk[j];
+          if (k === 0) gK_B_rec = g_uk;
+        }
+        if (recAOn) {
+          outer(this.W_cross_B_grad, caches.R_A_prev, g_cxB_total, dim, dim);
+          acc(grad_R_A_prev, matvecTernaryT(this.W_cross_B, g_cxB_total, dim, dim));
+        }
+      } else {
+        const lnB = LNb(gRB_new, caches.ln_recB_cache, this.ln_recB_gamma);
+        acc(this.ln_recB_gamma_grad, lnB.grad_gamma); acc(this.ln_recB_beta_grad, lnB.grad_beta);
+        const gRB_sum = lnB.grad_x;
+        acc(grad_R_B_prev, gRB_sum);
+        outer(this.W_rec_B_grad, caches.K_B_final, gRB_sum, dim, dim);
+        gK_B_rec = matvecTernaryT(this.W_rec_B, gRB_sum, dim, dim);
+        if (recAOn) {
+          outer(this.W_cross_B_grad, caches.R_A_prev, gRB_sum, dim, dim);
+          acc(grad_R_A_prev, matvecTernaryT(this.W_cross_B, gRB_sum, dim, dim));
+        }
       }
     }
 
@@ -2438,8 +2609,8 @@ class LEARNSModel {
     let grad_h = (helixOn && !perLayerH && gradStateIn && gradStateIn.h) ? gradStateIn.h.slice() : zeros(dim);
     let grad_P_top_extra = null;
     if (present && grad_logits) {
-      outer(this.W_present_grad, caches.h_frontier, grad_logits, vocab, dim);
-      const g_hf = matvecTernaryT(this.W_present, grad_logits, vocab, dim);
+      outer(W_pres_grad, caches.h_frontier, grad_logits, vocab, dim);
+      const g_hf = matvecTernaryT(W_pres, grad_logits, vocab, dim);
       if (frontierHelixOn) {
         acc(grad_h, g_hf);
       } else {
@@ -2600,6 +2771,8 @@ class LEARNSModel {
     this.W_rec_A_grad.fill(0); this.W_rec_B_grad.fill(0);
     this.W_cross_A_grad.fill(0); this.W_cross_B_grad.fill(0);
     this.W_frontier_grad.fill(0); this.W_present_grad.fill(0);
+    if (this.W_frontier_scout_grad) this.W_frontier_scout_grad.fill(0);
+    if (this.W_present_scout_grad) this.W_present_scout_grad.fill(0);
     this.ln_recA_gamma_grad.fill(0); this.ln_recA_beta_grad.fill(0);
     this.ln_recB_gamma_grad.fill(0); this.ln_recB_beta_grad.fill(0);
     for (let l = 0; l < this.numLayers; l++) {
@@ -3574,6 +3747,8 @@ function optimizerStep(model, step, lr, cfg = {}) {
                     model.W_frontier_grad, model.W_present_grad,
                     model.ln_recA_gamma_grad, model.ln_recA_beta_grad,
                     model.ln_recB_gamma_grad, model.ln_recB_beta_grad];
+  if (model.W_frontier_scout_grad) allGrads.push(model.W_frontier_scout_grad);
+  if (model.W_present_scout_grad) allGrads.push(model.W_present_scout_grad);
   let maxBetaGrad = 0, maxOtherGrad = 0;
   for (let l = 0; l < model.numLayers; l++) {
     allGrads.push(model.layers_W_A_grad[l], model.layers_W_B_grad[l],
@@ -3611,6 +3786,8 @@ function optimizerStep(model, step, lr, cfg = {}) {
   adamwStep(model.W_cross_B, model.W_cross_B_grad, model.W_cross_B_m1, model.W_cross_B_m2, step, lr);
   adamwStep(model.W_frontier, model.W_frontier_grad, model.W_frontier_m1, model.W_frontier_m2, step, lr);
   adamwStep(model.W_present, model.W_present_grad, model.W_present_m1, model.W_present_m2, step, lr);
+  if (model.W_frontier_scout) adamwStep(model.W_frontier_scout, model.W_frontier_scout_grad, model.W_frontier_scout_m1, model.W_frontier_scout_m2, step, lr);
+  if (model.W_present_scout) adamwStep(model.W_present_scout, model.W_present_scout_grad, model.W_present_scout_m1, model.W_present_scout_m2, step, lr);
   adamwStep(model.ln_recA_gamma, model.ln_recA_gamma_grad, model.ln_recA_gamma_m1, model.ln_recA_gamma_m2, step, lr*0.1);
   adamwStep(model.ln_recA_beta, model.ln_recA_beta_grad, model.ln_recA_beta_m1, model.ln_recA_beta_m2, step, lr*0.1);
   adamwStep(model.ln_recB_gamma, model.ln_recB_gamma_grad, model.ln_recB_gamma_m1, model.ln_recB_gamma_m2, step, lr*0.1);
@@ -3729,7 +3906,11 @@ function scoutBackwardPass(tokens, model, cfg) {
   const scoutTargets = new Array(len);
   R_B_at[len] = scoutState.R_B.slice();
 
-  const scoutCfg = Object.assign({}, cfg, { skipDiag: true });
+  const scoutCfg = Object.assign({}, cfg, {
+    skipDiag: true,
+    isScout: true,
+    useScoutHead: (cfg && cfg.scoutHead === 'separate')
+  });
   for (let t = len - 1; t >= 0; t--) {
     const { logits, state: ns, caches } = model.forward(tokens[t + 1], scoutState, scoutCfg);
     scoutCaches[t] = caches;
@@ -3788,7 +3969,7 @@ async function trainChunk(tokens, chunkCfg) {
   const recBOn = cfg.recordB !== 'off' && cfg.recordB !== false;
 
   // ── BACKWARD SCOUT ─────────────────────────────────────────────────────
-  const scoutScaleVal = cfg.scoutScale !== undefined ? Number(cfg.scoutScale) : 0.5;
+  const scoutScaleVal = cfg.scoutScale !== undefined ? Number(cfg.scoutScale) : 0;
   const rbMode = cfg.rbMode || 'causal';
   const needScout = recBOn && (scoutScaleVal > 0 || rbMode === 'prevrev' || rbMode === 'legacy');
   const { R_B_at: R_B_future, scoutCaches, scoutLogits, scoutTargets } = needScout
@@ -3886,6 +4067,9 @@ async function trainChunk(tokens, chunkCfg) {
     rAEntropy:     allDiag[allDiag.length-1].rAEntropy,
     rBEntropy:     allDiag[allDiag.length-1].rBEntropy,
     fEntropy:      allDiag.reduce((s,d) => s+d.fEntropy, 0) / allDiag.length,
+    rANorm:        allDiag.reduce((s,d) => s+(d.rANorm||0), 0) / allDiag.length,
+    rBNorm:        allDiag.reduce((s,d) => s+(d.rBNorm||0), 0) / allDiag.length,
+    rArBCos:       allDiag.reduce((s,d) => s+(d.rArBCos||0), 0) / allDiag.length,
     aAct:          allDiag.reduce((s,d) => s+d.aAct, 0) / allDiag.length,
     bAct:          allDiag.reduce((s,d) => s+d.bAct, 0) / allDiag.length,
     dS:            dS_chunk,
@@ -4001,6 +4185,7 @@ function evalFullSplit(splitTokens, model, cfg = {}, chunkSize = 64) {
   const rbMode = cfg.rbMode || 'causal';
   const recBOn = cfg.recordB !== 'off' && cfg.recordB !== false;
   let totalNLL = 0, totalBytes = 0, totalRes = 0, totalIters = 0, stepsCount = 0;
+  let totalRANorm = 0, totalRBNorm = 0, totalRArBCos = 0;
 
   for (let start = 0; start < M - 1; start += chunkSize) {
     const end = Math.min(M - 1, start + chunkSize);
@@ -4008,7 +4193,7 @@ function evalFullSplit(splitTokens, model, cfg = {}, chunkSize = 64) {
     if (model.arch === 'transformer') {
       state = model.getEmptyState();
     } else if (model.arch === 'learns' && rbMode === 'prevrev' && recBOn && prevScoutRB) {
-      state = { h: state.h, R_A: state.R_A, R_B: prevScoutRB.slice(), tokenHistory: state.tokenHistory };
+      state = { h: state.h, hs: state.hs, R_A: state.R_A, R_B: prevScoutRB.slice(), tokenHistory: state.tokenHistory };
     }
     for (let t = 0; t < chunkLen; t++) {
       const tok = splitTokens[start + t];
@@ -4025,6 +4210,9 @@ function evalFullSplit(splitTokens, model, cfg = {}, chunkSize = 64) {
       if (diagnostics) {
         totalRes += (diagnostics.fpResidualAvg || 0);
         totalIters += (diagnostics.fpItersAvg || 0);
+        totalRANorm += (diagnostics.rANorm || 0);
+        totalRBNorm += (diagnostics.rBNorm || 0);
+        totalRArBCos += (diagnostics.rArBCos || 0);
       }
       stepsCount++;
       state = ns;
@@ -4042,7 +4230,10 @@ function evalFullSplit(splitTokens, model, cfg = {}, chunkSize = 64) {
     bpb,
     ppl: Math.exp(loss),
     fpResidual: stepsCount > 0 ? totalRes / stepsCount : 0,
-    fpIters: stepsCount > 0 ? totalIters / stepsCount : 0
+    fpIters: stepsCount > 0 ? totalIters / stepsCount : 0,
+    rANorm: stepsCount > 0 ? totalRANorm / stepsCount : 0,
+    rBNorm: stepsCount > 0 ? totalRBNorm / stepsCount : 0,
+    rArBCos: stepsCount > 0 ? totalRArBCos / stepsCount : 0
   };
 }
 
@@ -4469,7 +4660,9 @@ function fpCfgNow() {
     coreB: g('sw-coreB') ? g('sw-coreB').value : 'on',
     fpInject: g('sw-fpInject') ? g('sw-fpInject').value : (g('cfg-fpinject') && g('cfg-fpinject').checked ? 'on' : 'off'),
     fpNorm: g('sw-fpNorm') ? g('sw-fpNorm').value : 'rescale',
-    scoutScale: g('sw-scoutScale') ? parseFloat(g('sw-scoutScale').value) : 0.5,
+    lookback: g('sw-lookback') ? parseInt(g('sw-lookback').value) : 16,
+    scoutScale: g('sw-scoutScale') ? parseFloat(g('sw-scoutScale').value) : 0,
+    scoutHead: g('sw-scoutHead') ? g('sw-scoutHead').value : 'shared',
     helixState: g('sw-helixState') ? g('sw-helixState').value : 'shared',
     ema: g('sw-ema') ? g('sw-ema').value : 'off',
     recordA: g('sw-recordA') ? g('sw-recordA').value : 'on',
@@ -4538,7 +4731,9 @@ function applyConfigToUI(cfg) {
   if (g('sw-fpIters')) g('sw-fpIters').value = String(c.fpIters);
   if (g('sw-fpInject')) g('sw-fpInject').value = c.fpInject;
   if (g('sw-fpNorm')) g('sw-fpNorm').value = c.fpNorm || 'rescale';
-  if (g('sw-scoutScale')) g('sw-scoutScale').value = String(c.scoutScale !== undefined ? c.scoutScale : 0.5);
+  if (g('sw-lookback')) g('sw-lookback').value = String(c.lookback || 16);
+  if (g('sw-scoutScale')) g('sw-scoutScale').value = String(c.scoutScale !== undefined ? c.scoutScale : 0);
+  if (g('sw-scoutHead')) g('sw-scoutHead').value = c.scoutHead || 'shared';
   if (g('sw-helixState')) g('sw-helixState').value = c.helixState || 'shared';
   if (g('sw-ema')) g('sw-ema').value = c.ema || 'off';
   if (g('cfg-fpinject')) g('cfg-fpinject').checked = (c.fpInject === 'on');
@@ -5148,7 +5343,7 @@ function exportModel(silent=false) {
   const skipOptim = document.getElementById('chk-save-optim') && document.getElementById('chk-save-optim').checked;
   const ser = serializeModelWeights(m, App.trainState, !skipOptim);
   const data = {
-    version: '0.0014',
+    version: '0.0015',
     step: App.step,
     codeHash: App.codeHash || '',
     corpusHash: App.corpusHash || '',
@@ -5167,7 +5362,7 @@ function exportModel(silent=false) {
   const a = document.createElement('a');
   a.href = url;
   const exportName = document.getElementById('cfg-export-name').value.trim();
-  const baseName = exportName || 'learns-v0.0014';
+  const baseName = exportName || 'learns-v0.0015';
   a.download = `${baseName}-step${App.step}.learns`;
   if (!silent) a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -5181,8 +5376,8 @@ function importModel(input) {
   reader.onload = (e) => {
     try {
       const data = JSON.parse(e.target.result);
-      if (!['0.0005','0.0006','0.0007','0.0008','0.0009','0.0010','0.0011','0.0012','0.0013','0.0014'].includes(data.version)) {
-        showToast('Incompatible .learns version ' + data.version + ' (reads v0.0005 to v0.0014)');
+      if (!['0.0005','0.0006','0.0007','0.0008','0.0009','0.0010','0.0011','0.0012','0.0013','0.0014','0.0015'].includes(data.version)) {
+        showToast('Incompatible .learns version ' + data.version + ' (reads v0.0005 to v0.0015)');
         return;
       }
       Tokenizer.deserialize(data.tokenizer);

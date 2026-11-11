@@ -1,6 +1,6 @@
-# LEARNS v0.0014 ("Signal and Noise") — Tier 3 Baselines Reference (`BASELINES.md`)
+# LEARNS v0.0015 ("The Partner Record") — Baselines Reference (`BASELINES.md`)
 
-To evaluate what LEARNS's six paper-derived components contribute on *The Adventures of Sherlock Holmes* (`corpus.txt`, 562,404 ASCII bytes, FNV-1a `CORPUS_HASH = 0x39c84ca9`), LEARNS v0.0014 includes three standard families of baselines inside the **exact same training, chunking, and evaluation harness** (`index.html` and `tests/run.js`):
+To evaluate what LEARNS's six paper-derived components contribute on *The Adventures of Sherlock Holmes* (`corpus.txt`, 562,404 ASCII bytes, FNV-1a `CORPUS_HASH = 0x39c84ca9`), LEARNS v0.0015 includes three standard families of baselines inside the **exact same training, chunking, and evaluation harness** (`index.html` and `tests/run.js`):
 
 1. **Interpolated Kneser–Ney $n$-gram tables** ($n \in \{1, 2, 3, 5\}$, both full-split `--ngramData=all` and data-matched `--ngramData=seen`).
 2. **Standard 2-layer GRU** (`arch=gru`, matched parameter count and state capacity at both `dim=32` and `dim=64`, in `weights=ternary` and `weights=float32`).
@@ -29,7 +29,7 @@ For order $M \in \{1, 2, 3, 5\}$:
 
 ### Full-Split (`--ngramData=all`) vs Data-Matched (`--ngramData=seen`)
 
-| Order | `--ngramData=all` (449,923 B) Test Loss (nats/B) | `--ngramData=seen` 150 steps (`stride`, 9,600 B) | `--ngramData=seen` 1,000 steps (`stride`, 64,000 B) | `--ngramData=seen` 7,030 steps (`stride`, 449,920 B, 1 pass) |
+| Order | `--ngramData=all` (449,923 B) Test Loss (nats/B) † | `--ngramData=seen` 150 steps (`stride`, 9,600 B) † | `--ngramData=seen` 1,000 steps (`stride`, 64,000 B) † | `--ngramData=seen` 7,030 steps (`stride`, 449,920 B, 1 pass) † |
 |---|---:|---:|---:|---:|
 | **1-gram (`unigram`)** | `3.0953` | `3.1174` | `3.0988` | `3.0953` |
 | **2-gram (`bigram`)** | `2.4349` | `2.5042` | `2.4419` | `2.4349` |
@@ -52,10 +52,11 @@ $$\text{logits}_t = Q(\mathbf{W}_{\text{out}})\mathbf{h}_t^{(L-1)} + \mathbf{b}_
 
 ### Parameter Count & State Capacity Matching (`dim=32` and `dim=64`)
 
-| Scale | Architecture | Active Parameters | Parameter Delta vs LEARNS | Recurrent State Floats Carried Across Tokens |
+| Scale | Architecture | Active Parameters | Parameter Delta vs LEARNS B0 | Recurrent State Floats Carried Across Tokens |
 |---|---|---:|---:|---|
-| **`dim=32`** | **LEARNS (`shared`)** | `54,400` | — | **`96` floats** ($\mathbf{R}_A \in \mathbb{R}^{32}, \mathbf{R}_B \in \mathbb{R}^{32}, \mathbf{h} \in \mathbb{R}^{32}$) |
-| **`dim=32`** | **LEARNS (`per_layer`)** | `54,400` | `0.00%` | **`128` floats** ($\mathbf{R}_A \in \mathbb{R}^{32}, \mathbf{R}_B \in \mathbb{R}^{32}, \mathbf{h}^{(0)} \in \mathbb{R}^{32}, \mathbf{h}^{(1)} \in \mathbb{R}^{32}$) |
+| **`dim=32`** | **LEARNS B0 (`recordB=on`)** | `54,400` | — | **`96` floats** ($\mathbf{R}_A \in \mathbb{R}^{32}, \mathbf{R}_B \in \mathbb{R}^{32}, \mathbf{h} \in \mathbb{R}^{32}$) |
+| **`dim=32`** | **LEARNS A1 (`recordB=off`)** | `51,328` | **`-5.65%`** | **`64` floats** ($\mathbf{R}_A \in \mathbb{R}^{32}, \mathbf{h} \in \mathbb{R}^{32}$) |
+| **`dim=32`** | **LEARNS A4 (`scoutHead=separate`)** | `70,784` *(54,400 inf + 16,384 aux)* | **`+30.12%` train / `0%` inf** | **`96` floats** ($\mathbf{R}_A \in \mathbb{R}^{32}, \mathbf{R}_B \in \mathbb{R}^{32}, \mathbf{h} \in \mathbb{R}^{32}$) |
 | **`dim=32`** | **GRU ($H=49, L=2$)** | `54,450` | **`+0.09%`** | **`98` floats** ($\mathbf{h}^{(0)} \in \mathbb{R}^{49}, \mathbf{h}^{(1)} \in \mathbb{R}^{49}$) |
 | **`dim=64`** | **LEARNS (`shared`)** | `164,224` | — | **`192` floats** ($\mathbf{R}_A \in \mathbb{R}^{64}, \mathbf{R}_B \in \mathbb{R}^{64}, \mathbf{h} \in \mathbb{R}^{64}$) |
 | **`dim=64`** | **GRU ($H=96, L=2$)** | `165,914` | **`+1.03%`** | **`192` floats** ($\mathbf{h}^{(0)} \in \mathbb{R}^{96}, \mathbf{h}^{(1)} \in \mathbb{R}^{96}$) |
@@ -74,14 +75,15 @@ At $\text{dim}=32$ ($d = 40$, $d_{\text{ff}} = 136$, $n_{\text{heads}} = 4$, cau
 
 Every neural configuration's learning rate was selected strictly on the validation split (`seed=3`, `1,000` steps, `--stream=stride`, test split untouched):
 
-| Model Family | Candidate `lr = 0.002` | Candidate `lr = 0.004` | Candidate `lr = 0.008` | Candidate `lr = 0.016` | Candidate `lr = 0.024 / 0.032` | Selected Winner (Val Loss) |
-|---|---:|---:|---:|---:|---:|---|
-| **LEARNS `weights=ternary` (`dim=32`)** | — | `2.5995` | `2.4381` | **`2.3220`** | — | **`lr = 0.016`** (`2.3220`) |
-| **LEARNS `weights=float32` (`dim=32`)** | `2.7055` | `4.5793` | `2.2166` | **`2.2142`** | — | **`lr = 0.016`** (`2.2142`) |
-| **LEARNS `scoutScale=0` (`dim=32, ternary`)** | — | — | `2.2434` | **`2.1764`** | `2.2343` (`0.024`) | **`lr = 0.016`** (`2.1764`) |
-| **LEARNS `dim=64` (`weights=ternary`)** | — | `2.2831` | **`2.1644`** | `2.2105` | — | **`lr = 0.008`** (`2.1644`) |
-| **GRU `dim=64` (`weights=ternary`)** | — | `1.9722` | **`1.9326`** | `2.0672` | — | **`lr = 0.008`** (`1.9326`) |
-| **GRU `dim=32` (`weights=ternary`)** | — | — | `2.0817` | **`2.0585`** | `2.2070` (`0.032`) | **`lr = 0.016`** (`2.0585`) |
-| **GRU `dim=32` (`weights=float32`)** | — | — | **`1.9569`** | `1.9859` | `2.1314` (`0.032`) | **`lr = 0.008 / 0.016`** (`1.9569 / 1.9859`) |
-| **Transformer `dim=32` (`weights=ternary`)** | — | `2.3620` | `2.3212` | **`2.3184`** | — | **`lr = 0.016`** (`2.3184`) |
-| **Transformer `dim=32` (`weights=float32`)** | — | `2.3245` | **`2.3097`** | `2.4621` | — | **`lr = 0.008`** (`2.3097`) |
+| Model Family | Candidate `lr = 0.004` | Candidate `lr = 0.008` | Candidate `lr = 0.016` | Candidate `lr = 0.024 / 0.032` | Selected Winner (Val Loss) |
+|---|---:|---:|---:|---:|---|
+| **LEARNS B0 `scoutScale=0;rbMode=causal` (`dim=32`)** | — | `2.2434` † | **`2.1764`** | `2.2343` (`0.024`) † | **`lr = 0.016`** (`2.1764`) |
+| **LEARNS A3a `rbMode=lookback;lookback=16` (`dim=32`)** | — | `2.2293` | **`2.1841`** | `2.2587` (`0.024`) | **`lr = 0.016`** (`2.1841`) |
+| **LEARNS A3b `rbMode=lookback;lookback=64` (`dim=32`)** | — | `2.2424` | **`2.1865`** | `2.2290` (`0.024`) | **`lr = 0.016`** (`2.1865`) |
+| **LEARNS A4 `scoutScale=0.5;scoutHead=separate` (`dim=32`)** | — | `2.2489` | **`2.2031`** | `2.2110` (`0.024`) | **`lr = 0.016`** (`2.2031`) |
+| **LEARNS v0.0014 `scoutScale=0.5` (`dim=32, ternary`) †** | `2.5995` † | `2.4381` † | **`2.3220`** | — | **`lr = 0.016`** (`2.3220`) |
+| **LEARNS `weights=float32` (`dim=32`) †** | `4.5793` † | `2.2166` † | **`2.2142`** † | — | **`lr = 0.016`** (`2.2142`) |
+| **GRU `dim=32` (`weights=ternary`) †** | — | `2.0817` † | **`2.0585`** † | `2.2070` (`0.032`) † | **`lr = 0.016`** (`2.0585`) |
+| **GRU `dim=32` (`weights=float32`) †** | — | **`1.9569`** † | `1.9859` † | `2.1314` (`0.032`) † | **`lr = 0.008 / 0.016`** (`1.9569 / 1.9859`) |
+| **Transformer `dim=32` (`weights=ternary`) †** | `2.3620` † | `2.3212` † | **`2.3184`** † | — | **`lr = 0.016`** (`2.3184`) |
+| **Transformer `dim=32` (`weights=float32`) †** | `2.3245` † | **`2.3097`** † | `2.4621` † | — | **`lr = 0.008`** (`2.3097`) |

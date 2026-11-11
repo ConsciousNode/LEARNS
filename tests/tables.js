@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Paired statistical analysis and Markdown table generator for LEARNS v0.0014 ("Signal and Noise").
+// Paired statistical analysis and Markdown table generator for LEARNS v0.0015 ("The Partner Record").
 // Reads results.jsonl and prints every table in EXPERIMENT_REPORT.md:
 //   - Per-seed values (seeds 3, 7, 11, 13, 17 for 5-seed studies; 3, 7, 11 for 7,030-step full passes)
 //   - Means, tail min/max/mean/range (--tail 5)
 //   - Paired Δ with mean, sample standard deviation (s_Δ), and 95% Student-t confidence interval (df = n - 1)
 //   - Tier 1 Dual Verdict Rule: 95% CI of paired Δ excludes 0 AND |mean Δ| > max(meanTailRange_A, meanTailRange_B)
+//   - Marks any row containing reused records (carrying a reusedFrom field) with †
 // Usage:
-//   node tests/tables.js [results.jsonl] [--section=all|tier1|tier2|tier3_lr|tier3_main|tier3_cap|tier3_stream|tier3_long]
+//   node tests/tables.js [results.jsonl] [--section=all|tier2|tier2_diag|tier2_traj|tier2_lr|tier3]
 'use strict';
 
 const fs = require('fs');
@@ -42,15 +43,42 @@ for (const line of rawLines) {
   } catch (e) {}
 }
 
-// Index latest record by (config, steps, stream, ngramData, seed)
-const byKey = new Map();
+// Separate indices for fresh v0.0015 records (!r.reusedFrom) and reused prior-release records (r.reusedFrom)
+const byFreshKey = new Map();
+const byReusedKey = new Map();
+
 for (const r of records) {
   const k = `${r.config}|${r.steps}|${r.stream || 'stride'}|${r.ngramData || ''}|${r.seed}`;
-  byKey.set(k, r);
+  if (r.reusedFrom) {
+    byReusedKey.set(k, r);
+    byReusedKey.set(`${r.codeHash}|${k}`, r);
+  } else {
+    byFreshKey.set(k, r);
+  }
 }
 
-function getRec(config, steps, stream, seed, ngramData = '') {
-  return byKey.get(`${config}|${steps}|${stream}|${ngramData}|${seed}`) || null;
+function getFreshRec(config, steps, stream, seed, ngramData = '') {
+  return byFreshKey.get(`${config}|${steps}|${stream}|${ngramData}|${seed}`) || null;
+}
+
+function getReusedRec(config, steps, stream, seed, codeHash = null, ngramData = '') {
+  const k = `${config}|${steps}|${stream}|${ngramData}|${seed}`;
+  if (codeHash) return byReusedKey.get(`${codeHash}|${k}`) || null;
+  return byReusedKey.get(k) || null;
+}
+
+function getFreshSeries(config, steps, stream, seeds, ngramData = '') {
+  return seeds.map(s => getFreshRec(config, steps, stream, s, ngramData));
+}
+
+function getReusedSeries(config, steps, stream, seeds, codeHash = null, ngramData = '') {
+  return seeds.map(s => getReusedRec(config, steps, stream, s, codeHash, ngramData));
+}
+
+function markLabelIfReused(label, recs, refRecs = null) {
+  const hasReused = (recs && recs.some(r => r && r.reusedFrom)) || (refRecs && refRecs.some(r => r && r.reusedFrom));
+  if (hasReused && !label.includes('†')) return `${label} †`;
+  return label;
 }
 
 function mean(arr) {
@@ -77,6 +105,10 @@ function fmtSigned(x, d = 4) {
   return (v >= 0 ? '+' : '') + v.toFixed(d);
 }
 
+function hasMultiTail(recs) {
+  return recs && recs.every(r => r && Array.isArray(r.valTail) && r.valTail.length > 1);
+}
+
 function computePairedStats(baseRecs, varRecs, field = 'testLoss') {
   const diffs = [];
   const baseTailRanges = [];
@@ -93,8 +125,8 @@ function computePairedStats(baseRecs, varRecs, field = 'testLoss') {
       baseVals.push(bv);
       varVals.push(vv);
     }
-    if (typeof b.valTailRange === 'number') baseTailRanges.push(b.valTailRange);
-    if (typeof v.valTailRange === 'number') varTailRanges.push(v.valTailRange);
+    if (typeof b.valTailRange === 'number' && Array.isArray(b.valTail) && b.valTail.length > 1) baseTailRanges.push(b.valTailRange);
+    if (typeof v.valTailRange === 'number' && Array.isArray(v.valTail) && v.valTail.length > 1) varTailRanges.push(v.valTailRange);
   }
 
   const n = diffs.length;
@@ -135,343 +167,332 @@ function computePairedStats(baseRecs, varRecs, field = 'testLoss') {
   };
 }
 
-function getSeries(config, steps, stream, seeds, ngramData = '') {
-  return seeds.map(s => getRec(config, steps, stream, s, ngramData));
-}
-
-function printTier1Table() {
+function printTier2MainTable() {
   const seeds = [3, 7, 11, 13, 17];
-  const baseCfg = 'L12:arch=learns;dim=32;lr=0.016';
+  const b0Recs = getFreshSeries('L12:arch=learns;dim=32;lr=0.016', 1000, 'stride', seeds);
+  const v14DefRecs = getReusedSeries('L12:arch=learns;dim=32;lr=0.016', 1000, 'stride', seeds, '0x4048aacb');
+
   const rows = [
-    { label: '`fpNorm=rescale;fpInject=on;ema=off` *(v0.0014 default)*', cfg: 'L12:arch=learns;dim=32;lr=0.016', isBase: true },
-    { label: '`fpNorm=rescale;fpInject=off;ema=off`', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpInject=off' },
-    { label: '`fpNorm=rescale;fpInject=on;ema=on`', cfg: 'L12:arch=learns;dim=32;lr=0.016;ema=on' },
-    { label: '`fpNorm=rescale;fpInject=off;ema=on`', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpInject=off;ema=on' },
-    { label: '`fpNorm=layernorm;fpInject=off` *(v0.0013 default)*', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpInject=off;fpNorm=layernorm' },
-    { label: '`fpNorm=layernorm;fpInject=on`', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpNorm=layernorm' },
-    { label: '`fpNorm=none;fpInject=on`', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpNorm=none' }
-  ];
-
-  const baseRecs = getSeries(baseCfg, 1000, 'stride', seeds);
-  console.log('### Table 1: Tier 1 Baseline Selection & Fixed-Point / EMA Candidates (1,000 Steps, `--stream=stride`, 5 Seeds `3, 7, 11, 13, 17`, `--tail 5`)');
-  console.log('');
-  console.log('| Configuration | Val Mean | Val Seeds (`3 / 7 / 11 / 13 / 17`) | Val Tail Mean | Mean Tail Range | Paired $\\Delta\\text{Val}$ Mean $\\pm s_\\Delta$ | 95% Student-$t$ CI ($df=4$) | Max Tail Range | Tier 1 Verdict (Val) |');
-  console.log('|---|---:|---|---:|---:|---:|---|---:|---|');
-
-  for (const r of rows) {
-    const recs = getSeries(r.cfg, 1000, 'stride', seeds);
-    if (recs.some(x => !x)) continue;
-    const valSeeds = recs.map(x => fmt(x.valLoss)).join(' / ');
-    const valMean = fmt(mean(recs.map(x => x.valLoss)));
-    const tailMean = fmt(mean(recs.map(x => x.valTailMean)));
-    const tailRange = fmt(mean(recs.map(x => x.valTailRange)));
-    if (r.isBase) {
-      console.log(`| ${r.label} | **${valMean}** | ${valSeeds} | ${tailMean} | ${tailRange} | — *(baseline)* | — | ${tailRange} | **Baseline** |`);
-    } else {
-      const st = computePairedStats(baseRecs, recs, 'valLoss');
-      const ciStr = `[${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}]`;
-      console.log(`| ${r.label} | ${valMean} | ${valSeeds} | ${tailMean} | ${tailRange} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)} | \`${ciStr}\` | ${fmt(st.maxTailRange)} | **${st.verdict}** |`);
+    {
+      label: '**B0**: `scoutScale=0;rbMode=causal` *(v0.0015 default)*',
+      role: 'Forward causal carry $R_B$, no reverse-LM loss',
+      recs: b0Recs,
+      isBase: true
+    },
+    {
+      label: '**A1**: `recordB=off` (`scoutScale=0`)',
+      role: 'Disable $R_B$ ($W_{\\text{rec},B}, W_{\\text{cross},A}, W_{\\text{cross},B}$ off)',
+      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;recordB=off', 1000, 'stride', seeds)
+    },
+    {
+      label: '**A2**: `rbMode=prevrev` (`scoutScale=0`)',
+      role: 'Seed $R_B$ at chunk start from reversed prev chunk',
+      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=prevrev', 1000, 'stride', seeds)
+    },
+    {
+      label: '**A3a**: `rbMode=lookback;lookback=16` (`scoutScale=0`)',
+      role: 'Rolling backward recurrence over $x_t \\dots x_{t-15}$',
+      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=16', 1000, 'stride', seeds)
+    },
+    {
+      label: '**A3b**: `rbMode=lookback;lookback=64` (`scoutScale=0`)',
+      role: 'Rolling backward recurrence over $x_t \\dots x_{t-63}$',
+      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=64', 1000, 'stride', seeds)
+    },
+    {
+      label: '**A4**: `scoutScale=0.5;scoutHead=separate`',
+      role: 'Reverse-LM scout on dedicated $W_{\\text{frontier,scout}}, W_{\\text{present,scout}}$',
+      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5;scoutHead=separate', 1000, 'stride', seeds)
+    },
+    {
+      label: 'v0.0014 default (`scoutScale=0.5;scoutHead=shared`)',
+      role: 'Reverse-LM scout sharing forward readout $W_{\\text{frontier}}, W_{\\text{present}}$',
+      recs: v14DefRecs
+    },
+    {
+      label: '**A4** vs v0.0014 default † *(paired readout isolation)*',
+      role: 'Effect of separating scout readout head at `scoutScale=0.5`',
+      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5;scoutHead=separate', 1000, 'stride', seeds),
+      refRecs: v14DefRecs,
+      refNote: 'vs shared scout †'
+    },
+    {
+      label: 'GRU `ternary` (`dim=32, lr=0.016`)',
+      role: 'Parameter-matched 2-layer ternary GRU baseline',
+      recs: getReusedSeries('L12:arch=gru;dim=32;lr=0.016', 1000, 'stride', seeds, '0x4048aacb')
     }
-  }
-  console.log('');
-}
-
-function printTier2Tables() {
-  const seeds = [3, 7, 11, 13, 17];
-  const baseCfg = 'L12:arch=learns;dim=32;lr=0.016';
-  const ablations = [
-    { label: '`fpNorm=rescale;fpInject=on` *(default)*', comp: 'All 6 components active', cfg: 'L12:arch=learns;dim=32;lr=0.016', isBase: true },
-    { label: '`frontierPresent=off`', comp: 'C4: Frontier present readout ($W_{\\text{present}}=0$)', cfg: 'L12:arch=learns;dim=32;lr=0.016;frontierPresent=off' },
-    { label: '`helix=off`', comp: 'C5: Helical State disabled ($h_t=P_t$)', cfg: 'L12:arch=learns;dim=32;lr=0.016;helix=off' },
-    { label: '`helixRetention=none`', comp: 'C5: Undamped rotation ($\\rho_t \\equiv 1$)', cfg: 'L12:arch=learns;dim=32;lr=0.016;helixRetention=none' },
-    { label: '`helixRetention=fixed`', comp: 'C5: Fixed retention ($\\rho \\equiv 0.9$)', cfg: 'L12:arch=learns;dim=32;lr=0.016;helixRetention=fixed' },
-    { label: '`thermo=off`', comp: 'C6: Thermodynamic loss ($\\lambda=0$)', cfg: 'L12:arch=learns;dim=32;lr=0.016;thermo=off' },
-    { label: '`coreA=off`', comp: 'C2: Temporal Turing Core A ($a_t=0$)', cfg: 'L12:arch=learns;dim=32;lr=0.016;coreA=off' },
-    { label: '`coreB=off`', comp: 'C2: Temporal Turing Core B ($b_t=0$)', cfg: 'L12:arch=learns;dim=32;lr=0.016;coreB=off' },
-    { label: '`relEmbed=off`', comp: 'C1: Relational Embedding ($W_{\\text{rel}}=0$)', cfg: 'L12:arch=learns;dim=32;lr=0.016;relEmbed=off' },
-    { label: '`fpIters=0`', comp: 'C3: Dyadic Fixed Point ($K_A^{(0)}, K_B^{(0)}$ only)', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpIters=0' },
-    { label: '`fpInject=off`', comp: 'C3: No input injection in Jacobi loop', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpInject=off' },
-    { label: '`fpNorm=none`', comp: 'C3: Contractive Jacobi without norm', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpNorm=none' },
-    { label: '`fpNorm=layernorm`', comp: 'C3: LayerNorm inside Jacobi (`fpInject=on`)', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpNorm=layernorm' },
-    { label: '`fpNorm=layernorm;fpInject=off`', comp: 'C3: v0.0013 default (`layernorm`, no inject)', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpInject=off;fpNorm=layernorm' },
-    { label: '`ema=on`', comp: 'Tier 1: EMA shadow weights ($\\beta=0.99$)', cfg: 'L12:arch=learns;dim=32;lr=0.016;ema=on' }
   ];
 
-  const baseRecs = getSeries(baseCfg, 1000, 'stride', seeds);
-
-  console.log('### Table 2A: Tier 2 Single-Factor Ablation Verdicts — Held-Out Test Loss (1,000 Steps, `--stream=stride`, 5 Seeds `3, 7, 11, 13, 17`, `--tail 5 --final`)');
+  console.log('### Table 1A: Tier 2 Partner Record Study — Held-Out Test Loss & Verdicts (1,000 Steps, `--stream=stride`, 5 Seeds `3, 7, 11, 13, 17`, `--tail 5 --final`)');
   console.log('');
-  console.log('| Switch / Configuration | Component | Val Mean | Mean Tail Range | Test Mean | Test Seeds (`3 / 7 / 11 / 13 / 17`) | Paired $\\Delta\\text{Test}$ Mean $\\pm s_\\Delta$ | 95% Student-$t$ CI ($df=4$) | Max Tail Range | Tier 1 Verdict |');
+  console.log('| Arm / Configuration | Partner Record Mechanism | Val Mean | Mean Tail Range | Test Mean | Test Seeds (`3 / 7 / 11 / 13 / 17`) | Paired $\\Delta\\text{Test}$ Mean $\\pm s_\\Delta$ | 95% Student-$t$ CI ($df=4$) | Max Tail Range | Tier 1 Verdict |');
   console.log('|---|---|---:|---:|---:|---|---:|---|---:|---|');
 
-  for (const r of ablations) {
-    const recs = getSeries(r.cfg, 1000, 'stride', seeds);
-    if (recs.some(x => !x)) continue;
+  for (const r of rows) {
+    const recs = r.recs;
+    if (!recs || recs.some(x => !x)) continue;
+    const lbl = markLabelIfReused(r.label, recs, r.refRecs);
     const valMean = fmt(mean(recs.map(x => x.valLoss)));
     const tailRange = fmt(mean(recs.map(x => x.valTailRange)));
     const testMean = fmt(mean(recs.map(x => x.testLoss)));
     const testSeeds = recs.map(x => fmt(x.testLoss)).join(' / ');
     if (r.isBase) {
-      console.log(`| ${r.label} | ${r.comp} | ${valMean} | ${tailRange} | **${testMean}** | ${testSeeds} | — *(baseline)* | — | ${tailRange} | **Baseline** |`);
+      console.log(`| ${lbl} | ${r.role} | ${valMean} | ${tailRange} | **${testMean}** | ${testSeeds} | — *(baseline B0)* | — | ${tailRange} | **Baseline** |`);
     } else {
-      const st = computePairedStats(baseRecs, recs, 'testLoss');
+      const ref = r.refRecs || b0Recs;
+      const st = computePairedStats(ref, recs, 'testLoss');
       const ciStr = `[${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}]`;
-      console.log(`| ${r.label} | ${r.comp} | ${valMean} | ${tailRange} | ${testMean} | ${testSeeds} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)} | \`${ciStr}\` | ${fmt(st.maxTailRange)} | **${st.verdict}** |`);
+      const note = r.refNote ? ` *(${r.refNote})*` : '';
+      console.log(`| ${lbl} | ${r.role} | ${valMean} | ${tailRange} | ${testMean} | ${testSeeds} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)}${note} | \`${ciStr}\` | ${fmt(st.maxTailRange)} | **${st.verdict}** |`);
     }
   }
   console.log('');
-
-  console.log('### Table 2B: Tier 2 Single-Factor Ablation Verdicts — Validation Loss & Diagnostics (1,000 Steps, `--stream=stride`, 5 Seeds `3, 7, 11, 13, 17`)');
+  console.log('*Note: Rows marked with `†` reuse bit-identical runs from `results.jsonl` with their original `codeHash` (`0x4048aacb` for v0.0014) and `reusedFrom` provenance field preserved.*');
   console.log('');
-  console.log('| Switch / Configuration | Val Mean | Val Tail Mean | Mean Tail Range | Paired $\\Delta\\text{Val}$ Mean $\\pm s_\\Delta$ | 95% Student-$t$ CI ($df=4$) | Tier 1 Verdict (Val) | Mean `fpResidual` | Mean `spikeCount` | Max `maxBetaGrad` |');
-  console.log('|---|---:|---:|---:|---:|---|---|---:|---:|---:|');
+}
 
-  for (const r of ablations) {
-    const recs = getSeries(r.cfg, 1000, 'stride', seeds);
-    if (recs.some(x => !x)) continue;
+function printTier2DiagTable() {
+  const seeds = [3, 7, 11, 13, 17];
+  const b0Recs = getFreshSeries('L12:arch=learns;dim=32;lr=0.016', 1000, 'stride', seeds);
+  const v14DefRecs = getReusedSeries('L12:arch=learns;dim=32;lr=0.016', 1000, 'stride', seeds, '0x4048aacb');
+  const v14Seed3Fresh = getFreshRec('L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5', 1000, 'stride', 3);
+
+  const rows = [
+    { label: '**B0**: `scoutScale=0;rbMode=causal` *(default)*', recs: b0Recs, isBase: true },
+    { label: '**A1**: `recordB=off` (`scoutScale=0`)', recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;recordB=off', 1000, 'stride', seeds) },
+    { label: '**A2**: `rbMode=prevrev` (`scoutScale=0`)', recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=prevrev', 1000, 'stride', seeds) },
+    { label: '**A3a**: `rbMode=lookback;lookback=16` (`scoutScale=0`)', recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=16', 1000, 'stride', seeds) },
+    { label: '**A3b**: `rbMode=lookback;lookback=64` (`scoutScale=0`)', recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=64', 1000, 'stride', seeds) },
+    { label: '**A4**: `scoutScale=0.5;scoutHead=separate`', recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5;scoutHead=separate', 1000, 'stride', seeds) },
+    { label: 'v0.0014 default (`scoutScale=0.5;scoutHead=shared`)', recs: v14DefRecs, diagFallback: v14Seed3Fresh }
+  ];
+
+  console.log('### Table 1B: Tier 2 Partner Record Study — Validation Verdicts, Training Speed (`tokensPerSec`), and End-of-Training $\\mathbf{R}_B$ Diagnostics (1,000 Steps, 5 Seeds `3, 7, 11, 13, 17`)');
+  console.log('');
+  console.log('| Arm / Configuration | Params | Val Mean | Val Tail Mean | Mean Tail Range | Paired $\\Delta\\text{Val}$ Mean $\\pm s_\\Delta$ | 95% Student-$t$ CI ($df=4$) | Tier 1 Verdict (Val) | Mean `tokensPerSec` | End $\\|\\mathbf{R}_A\\|_2$ | End $\\|\\mathbf{R}_B\\|_2$ | End $\\cos(\\mathbf{R}_A, \\mathbf{R}_B)$ |');
+  console.log('|---|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|');
+
+  for (const r of rows) {
+    const recs = r.recs;
+    if (!recs || recs.some(x => !x)) continue;
+    const lbl = markLabelIfReused(r.label, recs);
+    const params = recs[0].paramCount.toLocaleString('en-US');
     const valMean = fmt(mean(recs.map(x => x.valLoss)));
     const tailMean = fmt(mean(recs.map(x => x.valTailMean)));
     const tailRange = fmt(mean(recs.map(x => x.valTailRange)));
-    const fpRes = mean(recs.map(x => x.fpResidual || 0)).toExponential(2);
-    const spk = fmt(mean(recs.map(x => x.spikeCount || 0)), 1);
-    const maxB = Math.max(...recs.map(x => x.maxBetaGrad || 0)).toExponential(2);
-    if (r.isBase) {
-      console.log(`| ${r.label} | **${valMean}** | ${tailMean} | ${tailRange} | — *(baseline)* | — | **Baseline** | ${fpRes} | ${spk} | ${maxB} |`);
+    const tps = Math.round(mean(recs.map(x => x.tokensPerSec))).toLocaleString('en-US');
+
+    let rANormStr, rBNormStr, cosStr;
+    if (recs.every(x => typeof x.rBNorm === 'number')) {
+      rANormStr = fmt(mean(recs.map(x => x.rANorm)), 4);
+      rBNormStr = fmt(mean(recs.map(x => x.rBNorm)), 4);
+      cosStr = fmtSigned(mean(recs.map(x => x.rArBCos)), 4);
+    } else if (r.diagFallback) {
+      rANormStr = `${fmt(r.diagFallback.rANorm, 4)} *(s3)*`;
+      rBNormStr = `${fmt(r.diagFallback.rBNorm, 4)} *(s3)*`;
+      cosStr = `${fmtSigned(r.diagFallback.rArBCos, 4)} *(s3)*`;
     } else {
-      const st = computePairedStats(baseRecs, recs, 'valLoss');
+      rANormStr = '—'; rBNormStr = '—'; cosStr = '—';
+    }
+
+    if (r.isBase) {
+      console.log(`| ${lbl} | ${params} | **${valMean}** | ${tailMean} | ${tailRange} | — *(baseline B0)* | — | **Baseline** | ${tps} | ${rANormStr} | ${rBNormStr} | ${cosStr} |`);
+    } else {
+      const st = computePairedStats(b0Recs, recs, 'valLoss');
       const ciStr = `[${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}]`;
-      console.log(`| ${r.label} | ${valMean} | ${tailMean} | ${tailRange} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)} | \`${ciStr}\` | **${st.verdict}** | ${fpRes} | ${spk} | ${maxB} |`);
+      console.log(`| ${lbl} | ${params} | ${valMean} | ${tailMean} | ${tailRange} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)} | \`${ciStr}\` | **${st.verdict}** | ${tps} | ${rANormStr} | ${rBNormStr} | ${cosStr} |`);
     }
   }
   console.log('');
 }
 
-function printTier3LRSweep() {
-  console.log('### Table 3A: Tier 3 & Tier 4 Validation Learning-Rate Sweeps (`seed=3`, 1,000 Steps, `--stream=stride`, `--tail 5`, Validation Only)');
+function printTier2TrajectoryTable() {
+  const seeds = [3, 7, 11, 13, 17];
+  const arms = [
+    { label: '**B0**: `scoutScale=0;rbMode=causal`', cfg: 'L12:arch=learns;dim=32;lr=0.016' },
+    { label: '**A1**: `recordB=off`', cfg: 'L12:arch=learns;dim=32;lr=0.016;recordB=off' },
+    { label: '**A2**: `rbMode=prevrev`', cfg: 'L12:arch=learns;dim=32;lr=0.016;rbMode=prevrev' },
+    { label: '**A3a**: `rbMode=lookback;lookback=16`', cfg: 'L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=16' },
+    { label: '**A3b**: `rbMode=lookback;lookback=64`', cfg: 'L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=64' },
+    { label: '**A4**: `scoutScale=0.5;scoutHead=separate`', cfg: 'L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5;scoutHead=separate' },
+    { label: 'v0.0014 default (`scoutScale=0.5;scoutHead=shared`, seed 3 repro)', cfg: 'L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5', seedsOverride: [3] }
+  ];
+
+  const stepsList = [1, 250, 500, 750, 1000];
+  console.log('### Table 1C: Partner Record $\\mathbf{R}_B$ Norm $\\|\\mathbf{R}_B\\|_2$ and Cosine $\\cos(\\mathbf{R}_A, \\mathbf{R}_B)$ Trajectory Over Training Time (5-Seed Means across Steps `1 .. 1000` and Final Validation)');
   console.log('');
-  console.log('| Model Family | Candidate `lr` | Config String | Val Final | Val Tail Min | Val Tail Max | Val Tail Mean | Val Tail Range | Selected on Val? |');
+  console.log('| Arm / Configuration | Step 1 $\\|\\mathbf{R}_B\\| / \\cos$ | Step 250 $\\|\\mathbf{R}_B\\| / \\cos$ | Step 500 $\\|\\mathbf{R}_B\\| / \\cos$ | Step 750 $\\|\\mathbf{R}_B\\| / \\cos$ | Step 1000 $\\|\\mathbf{R}_B\\| / \\cos$ | Final Val $\\|\\mathbf{R}_B\\| / \\cos$ |');
+  console.log('|---|---|---|---|---|---|---|');
+
+  for (const a of arms) {
+    const sList = a.seedsOverride || seeds;
+    const recs = getFreshSeries(a.cfg, 1000, 'stride', sList);
+    if (recs.some(x => !x || !x.rBDiagCurve)) continue;
+    const stepCells = stepsList.map(st => {
+      const pts = recs.map(r => r.rBDiagCurve.find(p => p.step === st)).filter(Boolean);
+      const nMean = mean(pts.map(p => p.rBNorm));
+      const cMean = mean(pts.map(p => p.rArBCos));
+      return `${fmt(nMean, 2)} / ${fmtSigned(cMean, 3)}`;
+    });
+    const valN = mean(recs.map(r => r.rBNorm));
+    const valC = mean(recs.map(r => r.rArBCos));
+    console.log(`| ${a.label} | ${stepCells.join(' | ')} | **${fmt(valN, 2)} / ${fmtSigned(valC, 3)}** |`);
+  }
+  console.log('');
+}
+
+function printTier2LRSweepTable() {
+  console.log('### Table 1D: Validation Learning-Rate Verification for Partner-Record Modes (`seed=3`, 1,000 Steps, `--stream=stride`, `--tail 5`, Validation Only)');
+  console.log('');
+  console.log('| Partner-Record Mode | Candidate `lr` | Config String | Val Final | Val Tail Min | Val Tail Max | Val Tail Mean | Val Tail Range | Selected on Val? |');
   console.log('|---|---:|---|---:|---:|---:|---:|---:|---|');
 
   const groups = [
     {
-      name: 'LEARNS `weights=float32` (`dim=32`)',
+      name: '**B0**: `scoutScale=0;rbMode=causal`',
       items: [
-        { lr: '0.002', cfg: 'L12:arch=learns;dim=32;lr=0.002;weights=float32' },
-        { lr: '0.004', cfg: 'L12:arch=learns;dim=32;weights=float32' },
-        { lr: '0.008', cfg: 'L12:arch=learns;dim=32;lr=0.008;weights=float32' },
-        { lr: '0.016', cfg: 'L12:arch=learns;dim=32;lr=0.016;weights=float32' }
+        { lr: '0.008', rec: getReusedRec('L12:arch=learns;dim=32;lr=0.008;scoutScale=0', 1000, 'stride', 3, '0x4048aacb') },
+        { lr: '0.016', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.016', 1000, 'stride', 3) },
+        { lr: '0.024', rec: getReusedRec('L12:arch=learns;dim=32;lr=0.024;scoutScale=0', 1000, 'stride', 3, '0x4048aacb') }
       ]
     },
     {
-      name: 'LEARNS `dim=64` (`weights=ternary`)',
+      name: '**A3a**: `rbMode=lookback;lookback=16`',
       items: [
-        { lr: '0.004', cfg: 'L12:arch=learns;dim=64' },
-        { lr: '0.008', cfg: 'L12:arch=learns;dim=64;lr=0.008' },
-        { lr: '0.016', cfg: 'L12:arch=learns;dim=64;lr=0.016' }
+        { lr: '0.008', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.008;rbMode=lookback;lookback=16', 1000, 'stride', 3) },
+        { lr: '0.016', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=16', 1000, 'stride', 3) },
+        { lr: '0.024', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.024;rbMode=lookback;lookback=16', 1000, 'stride', 3) }
       ]
     },
     {
-      name: 'GRU `dim=64` (`weights=ternary`)',
+      name: '**A3b**: `rbMode=lookback;lookback=64`',
       items: [
-        { lr: '0.004', cfg: 'L12:arch=gru;dim=64' },
-        { lr: '0.008', cfg: 'L12:arch=gru;dim=64;lr=0.008' },
-        { lr: '0.016', cfg: 'L12:arch=gru;dim=64;lr=0.016' }
+        { lr: '0.008', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.008;rbMode=lookback;lookback=64', 1000, 'stride', 3) },
+        { lr: '0.016', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=64', 1000, 'stride', 3) },
+        { lr: '0.024', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.024;rbMode=lookback;lookback=64', 1000, 'stride', 3) }
       ]
     },
     {
-      name: 'LEARNS `scoutScale=0` (`dim=32, ternary`)',
+      name: '**A4**: `scoutScale=0.5;scoutHead=separate`',
       items: [
-        { lr: '0.008', cfg: 'L12:arch=learns;dim=32;lr=0.008;scoutScale=0' },
-        { lr: '0.016', cfg: 'L12:arch=learns;dim=32;lr=0.016;scoutScale=0' },
-        { lr: '0.024', cfg: 'L12:arch=learns;dim=32;lr=0.024;scoutScale=0' }
+        { lr: '0.008', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.008;scoutScale=0.5;scoutHead=separate', 1000, 'stride', 3) },
+        { lr: '0.016', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5;scoutHead=separate', 1000, 'stride', 3) },
+        { lr: '0.024', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.024;scoutScale=0.5;scoutHead=separate', 1000, 'stride', 3) }
       ]
     }
   ];
 
   for (const g of groups) {
-    let bestCfg = null, bestVal = Infinity;
+    let bestLR = null, bestVal = Infinity;
     for (const it of g.items) {
-      const r = getRec(it.cfg, 1000, 'stride', 3);
-      if (r && r.valLoss < bestVal) { bestVal = r.valLoss; bestCfg = it.cfg; }
+      if (it.rec && it.rec.valLoss < bestVal) { bestVal = it.rec.valLoss; bestLR = it.lr; }
     }
     for (const it of g.items) {
-      const r = getRec(it.cfg, 1000, 'stride', 3);
+      const r = it.rec;
       if (!r) continue;
-      const win = it.cfg === bestCfg;
-      console.log(`| ${g.name} | \`${it.lr}\` | \`${r.config}\` | ${win ? '**' + fmt(r.valLoss) + '**' : fmt(r.valLoss)} | ${fmt(r.valTailMin)} | ${fmt(r.valTailMax)} | ${fmt(r.valTailMean)} | ${fmt(r.valTailRange)} | ${win ? '**Yes (Winner)**' : 'No'} |`);
+      const win = it.lr === bestLR;
+      const rowName = r.reusedFrom ? `${g.name} †` : g.name;
+      const cfgDagger = r.reusedFrom ? ' †' : '';
+      console.log(`| ${rowName} | \`${it.lr}\` | \`${r.config}\`${cfgDagger} | ${win ? '**' + fmt(r.valLoss) + '**' : fmt(r.valLoss)} | ${fmt(r.valTailMin)} | ${fmt(r.valTailMax)} | ${fmt(r.valTailMean)} | ${fmt(r.valTailRange)} | ${win ? '**Yes (Winner)**' : 'No'} |`);
     }
   }
   console.log('');
 }
 
-function printTier3MainTable() {
-  const seeds = [3, 7, 11, 13, 17];
-  const baseCfg = 'L12:arch=learns;dim=32;lr=0.016';
-  const baseRecs = getSeries(baseCfg, 1000, 'stride', seeds);
-
-  const arms = [
-    { label: 'LEARNS default (`ternary, scoutScale=0.5`)', params: '54,400', stateFloats: '96', cfg: 'L12:arch=learns;dim=32;lr=0.016', isBase: true },
-    { label: 'LEARNS `helixState=per_layer` (`ternary`)', params: '54,400', stateFloats: '128', cfg: 'L12:arch=learns;dim=32;lr=0.016;helixState=per_layer' },
-    { label: 'LEARNS `weights=float32` (`scoutScale=0.5`)', params: '54,400', stateFloats: '96', cfg: 'L12:arch=learns;dim=32;lr=0.016;weights=float32' },
-    { label: 'LEARNS `scoutScale=0` (`ternary`, Tier 4)', params: '54,400', stateFloats: '96', cfg: 'L12:arch=learns;dim=32;lr=0.016;scoutScale=0' },
-    { label: 'LEARNS `weights=float32;scoutScale=0` (Tier 3+4)', params: '54,400', stateFloats: '96', cfg: 'L12:arch=learns;dim=32;lr=0.016;weights=float32;scoutScale=0' },
-    { label: 'Transformer `ternary` (`dim=32`)', params: '54,656', stateFloats: 'KV(64)', cfg: 'L12:arch=transformer;dim=32;lr=0.016' },
-    { label: 'Transformer `float32` (`dim=32`)', params: '54,656', stateFloats: 'KV(64)', cfg: 'L12:arch=transformer;dim=32;lr=0.008;weights=float32' },
-    { label: 'GRU `ternary` (`dim=32`)', params: '54,450', stateFloats: '98', cfg: 'L12:arch=gru;dim=32;lr=0.016' },
-    { label: 'GRU `float32` (`dim=32`)', params: '54,450', stateFloats: '98', cfg: 'L12:arch=gru;dim=32;lr=0.016;weights=float32' }
-  ];
-
-  console.log('### Table 3B: Tier 3 & Tier 4 Architecture & Bottleneck Comparison at `dim=32` (1,000 Steps, `--stream=stride`, 5 Seeds `3, 7, 11, 13, 17`, `--tail 5 --final`)');
-  console.log('');
-  console.log('| Architecture / Configuration | Params | Recurrent State | Val Mean | Mean Tail Range | Test Mean | Test Seeds (`3 / 7 / 11 / 13 / 17`) | Paired $\\Delta\\text{Test}$ vs LEARNS | 95% Student-$t$ CI ($df=4$) | Tier 1 Verdict |');
-  console.log('|---|---:|---:|---:|---:|---:|---|---:|---|---|');
-
-  for (const a of arms) {
-    const recs = getSeries(a.cfg, 1000, 'stride', seeds);
-    if (recs.some(x => !x)) continue;
-    const valMean = fmt(mean(recs.map(x => x.valLoss)));
-    const tailRange = fmt(mean(recs.map(x => x.valTailRange)));
-    const testMean = fmt(mean(recs.map(x => x.testLoss)));
-    const testSeeds = recs.map(x => fmt(x.testLoss)).join(' / ');
-    if (a.isBase) {
-      console.log(`| ${a.label} | ${a.params} | ${a.stateFloats} | ${valMean} | ${tailRange} | **${testMean}** | ${testSeeds} | — *(baseline)* | — | **Baseline** |`);
-    } else {
-      const st = computePairedStats(baseRecs, recs, 'testLoss');
-      const ciStr = `[${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}]`;
-      console.log(`| ${a.label} | ${a.params} | ${a.stateFloats} | ${valMean} | ${tailRange} | ${testMean} | ${testSeeds} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)} | \`${ciStr}\` | **${st.verdict}** |`);
-    }
-  }
-  console.log('');
-}
-
-function printTier3CapTable() {
-  const seeds = [3, 7, 11, 13, 17];
-  const baseCfg = 'L12:arch=learns;dim=32;lr=0.016';
-  const baseRecs = getSeries(baseCfg, 1000, 'stride', seeds);
-
-  const arms = [
-    { label: 'LEARNS `dim=32` (`helixState=shared`)', params: '54,400', state: '96 floats ($R_A:32, R_B:32, h:32$)', cfg: 'L12:arch=learns;dim=32;lr=0.016', refRecs: baseRecs, isBase: true },
-    { label: 'LEARNS `dim=32;helixState=per_layer`', params: '54,400', state: '128 floats ($R_A:32, R_B:32, h^{(0)}:32, h^{(1)}:32$)', cfg: 'L12:arch=learns;dim=32;lr=0.016;helixState=per_layer', refRecs: baseRecs },
-    { label: 'LEARNS `dim=64` (`lr=0.008`)', params: '164,224', state: '192 floats ($R_A:64, R_B:64, h:64$)', cfg: 'L12:arch=learns;dim=64;lr=0.008', refRecs: baseRecs },
-    { label: 'GRU `dim=32` (`weights=ternary, lr=0.016`)', params: '54,450', state: '98 floats ($h^{(0)}:49, h^{(1)}:49$)', cfg: 'L12:arch=gru;dim=32;lr=0.016', refRecs: baseRecs },
-    { label: 'GRU `dim=64` (`weights=ternary, lr=0.008`)', params: '165,914', state: '192 floats ($h^{(0)}:96, h^{(1)}:96$)', cfg: 'L12:arch=gru;dim=64;lr=0.008', refRecs: getSeries('L12:arch=learns;dim=64;lr=0.008', 1000, 'stride', seeds), refLabel: 'vs LEARNS `dim=64`' }
-  ];
-
-  console.log('### Table 4: Tier 3.2 State Capacity & Width Scaling (`dim=32` vs `dim=64` and `helixState=per_layer`, 1,000 Steps, 5 Seeds `3, 7, 11, 13, 17`)');
-  console.log('');
-  console.log('| Configuration | Params | Recurrent State | Val Mean | Mean Tail Range | Test Mean | Test Seeds (`3 / 7 / 11 / 13 / 17`) | Paired $\\Delta\\text{Test}$ | 95% Student-$t$ CI ($df=4$) | Tier 1 Verdict |');
-  console.log('|---|---:|---|---:|---:|---:|---|---:|---|---|');
-
-  for (const a of arms) {
-    const recs = getSeries(a.cfg, 1000, 'stride', seeds);
-    if (recs.some(x => !x)) continue;
-    const valMean = fmt(mean(recs.map(x => x.valLoss)));
-    const tailRange = fmt(mean(recs.map(x => x.valTailRange)));
-    const testMean = fmt(mean(recs.map(x => x.testLoss)));
-    const testSeeds = recs.map(x => fmt(x.testLoss)).join(' / ');
-    if (a.isBase) {
-      console.log(`| ${a.label} | ${a.params} | ${a.state} | ${valMean} | ${tailRange} | **${testMean}** | ${testSeeds} | — *(baseline)* | — | **Baseline** |`);
-    } else {
-      const st = computePairedStats(a.refRecs, recs, 'testLoss');
-      const ciStr = `[${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}]`;
-      const note = a.refLabel ? ` *(${a.refLabel})*` : '';
-      console.log(`| ${a.label} | ${a.params} | ${a.state} | ${valMean} | ${tailRange} | ${testMean} | ${testSeeds} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)}${note} | \`${ciStr}\` | **${st.verdict}** |`);
-    }
-  }
-  console.log('');
-}
-
-function printTier3StreamTable() {
-  const seeds = [3, 7, 11, 13, 17];
-  console.log('### Table 5: Tier 3.3 Disentangling `--stream=head` vs `--stream=block` vs `--stream=stride` (150 Steps, 9,600 Bytes Seen, 5 Seeds `3, 7, 11, 13, 17`)');
-  console.log('');
-  console.log('| Model (`dim=32, lr=0.016`) | Stream Mode | Val Mean | Test Mean | Test Seeds (`3 / 7 / 11 / 13 / 17`) | Mean Tail Range | Paired $\\Delta\\text{Test}$ vs `head` | 95% CI vs `head` ($df=4$) | Paired $\\Delta\\text{Test}$ vs `block` | 95% CI vs `block` ($df=4$) |');
-  console.log('|---|---|---:|---:|---|---:|---:|---|---:|---|');
-
-  for (const [mLabel, cfg] of [['LEARNS v0.0014 (`lr=0.016, rescale, inject`)', 'L12:arch=learns;dim=32;lr=0.016'], ['LEARNS v0.0013 (`lr=0.004, layernorm, no-inject`)', 'L12:arch=learns;dim=32;fpInject=off;fpNorm=layernorm'], ['GRU (`weights=ternary, lr=0.016`)', 'L12:arch=gru;dim=32;lr=0.016']]) {
-    const headRecs = getSeries(cfg, 150, 'head', seeds);
-    const blockRecs = getSeries(cfg, 150, 'block', seeds);
-    const strideRecs = getSeries(cfg, 150, 'stride', seeds);
-    if (headRecs.some(x => !x) || blockRecs.some(x => !x) || strideRecs.some(x => !x)) continue;
-
-    for (const [sMode, recs] of [['`head` *(bytes 0..9,600)*', headRecs], ['`block` *(1 random 9,600B block)*', blockRecs], ['`stride` *(150 strided chunks)*', strideRecs]]) {
-      const valMean = fmt(mean(recs.map(x => x.valLoss)));
-      const testMean = fmt(mean(recs.map(x => x.testLoss)));
-      const testSeeds = recs.map(x => fmt(x.testLoss)).join(' / ');
-      const tailRange = fmt(mean(recs.map(x => x.valTailRange)));
-
-      let dHead = '—', ciHead = '—', dBlock = '—', ciBlock = '—';
-      if (recs !== headRecs) {
-        const stH = computePairedStats(headRecs, recs, 'testLoss');
-        dHead = `${fmtSigned(stH.dMean)} $\\pm$ ${fmt(stH.dSD)}`;
-        ciHead = `\`[${fmtSigned(stH.ciLo)}, ${fmtSigned(stH.ciHi)}]\``;
-      }
-      if (recs === strideRecs) {
-        const stB = computePairedStats(blockRecs, recs, 'testLoss');
-        dBlock = `${fmtSigned(stB.dMean)} $\\pm$ ${fmt(stB.dSD)}`;
-        ciBlock = `\`[${fmtSigned(stB.ciLo)}, ${fmtSigned(stB.ciHi)}]\``;
-      }
-      console.log(`| ${mLabel} | ${sMode} | ${valMean} | **${testMean}** | ${testSeeds} | ${tailRange} | ${dHead} | ${ciHead} | ${dBlock} | ${ciBlock} |`);
-    }
-  }
-  console.log('');
-}
-
-function printTier3LongTable() {
+function printTier3Tables() {
   const seeds = [3, 7, 11];
-  const baseCfg = 'L12:arch=learns;dim=32;lr=0.016';
-  const baseRecs = getSeries(baseCfg, 7030, 'stride', seeds);
-  const scoutRecs = getSeries('L12:arch=learns;dim=32;lr=0.016;scoutScale=0', 7030, 'stride', seeds);
+  const b0FullRecs = getFreshSeries('L12:arch=learns;dim=32;lr=0.016', 7030, 'stride', seeds);
+  const gruFullFreshRecs = getFreshSeries('L12:arch=gru;dim=32;lr=0.016', 7030, 'stride', seeds);
 
   const arms = [
-    { label: 'LEARNS v0.0014 default (`fpNorm=rescale;fpInject=on`)', cfg: 'L12:arch=learns;dim=32;lr=0.016', isBase: true },
-    { label: 'LEARNS v0.0013 legacy (`fpNorm=layernorm;fpInject=off`)', cfg: 'L12:arch=learns;dim=32;lr=0.016;fpInject=off;fpNorm=layernorm' },
-    { label: 'LEARNS `relEmbed=off` (`fpNorm=layernorm;fpInject=off`)', cfg: 'L12:arch=learns;dim=32;lr=0.016;relEmbed=off;fpInject=off;fpNorm=layernorm' },
-    { label: 'LEARNS `weights=float32` (`lr=0.016`)', cfg: 'L12:arch=learns;dim=32;lr=0.016;weights=float32' },
-    { label: 'LEARNS `scoutScale=0` (`ternary, lr=0.016`, Tier 4)', cfg: 'L12:arch=learns;dim=32;lr=0.016;scoutScale=0' },
-    { label: 'LEARNS `weights=float32;scoutScale=0` (`lr=0.016`, Tier 3+4)', cfg: 'L12:arch=learns;dim=32;lr=0.016;weights=float32;scoutScale=0' },
-    { label: 'Transformer `ternary` (`dim=32, lr=0.016`)', cfg: 'L12:arch=transformer;dim=32;lr=0.016' },
-    { label: 'Transformer `float32` (`dim=32, lr=0.008`)', cfg: 'L12:arch=transformer;dim=32;lr=0.008;weights=float32' },
-    { label: 'GRU `ternary` (`dim=32, lr=0.016`)', cfg: 'L12:arch=gru;dim=32;lr=0.016' },
-    { label: 'GRU `ternary` vs LEARNS `scoutScale=0` *(paired)*', cfg: 'L12:arch=gru;dim=32;lr=0.016', refRecs: scoutRecs, refLabel: 'vs `scoutScale=0`' },
-    { label: 'GRU `float32` (`dim=32, lr=0.016`)', cfg: 'L12:arch=gru;dim=32;lr=0.016;weights=float32' },
-    { label: 'GRU `float32` (`dim=32, lr=0.008`)', cfg: 'L12:arch=gru;dim=32;lr=0.008;weights=float32' }
+    {
+      label: 'LEARNS v0.0015 default (**B0**: `scoutScale=0, rbMode=causal`)',
+      code: '`0x626fd26c` *(fresh v0.0015)*',
+      recs: b0FullRecs,
+      isBase: true
+    },
+    {
+      label: 'GRU `ternary` (`dim=32, lr=0.016`)',
+      code: '`0x626fd26c` *(fresh v0.0015)*',
+      recs: gruFullFreshRecs
+    },
+    {
+      label: 'LEARNS v0.0014 default (`scoutScale=0.5, rescale, inject`)',
+      code: '`0x4048aacb` *(v0.0014)*',
+      recs: getReusedSeries('L12:arch=learns;dim=32;lr=0.016', 7030, 'stride', seeds, '0x4048aacb')
+    },
+    {
+      label: 'LEARNS `weights=float32;scoutScale=0` (`lr=0.016`)',
+      code: '`0x4048aacb` *(v0.0014)*',
+      recs: getReusedSeries('L12:arch=learns;dim=32;lr=0.016;weights=float32;scoutScale=0', 7030, 'stride', seeds, '0x4048aacb')
+    },
+    {
+      label: 'LEARNS `weights=float32;scoutScale=0.5` (`lr=0.016`)',
+      code: '`0x4048aacb` *(v0.0014)*',
+      recs: getReusedSeries('L12:arch=learns;dim=32;lr=0.016;weights=float32', 7030, 'stride', seeds, '0x4048aacb')
+    },
+    {
+      label: 'LEARNS v0.0013 legacy (`layernorm, no-inject, scoutScale=0.5`)',
+      code: '`0xdf8ae499` *(v0.0013)*',
+      recs: getReusedSeries('L12:arch=learns;dim=32;lr=0.016;fpInject=off;fpNorm=layernorm', 7030, 'stride', seeds, '0xdf8ae499')
+    },
+    {
+      label: 'Transformer `ternary` (`dim=32, lr=0.016`)',
+      code: '`0xdf8ae499` *(v0.0013)*',
+      recs: getReusedSeries('L12:arch=transformer;dim=32;lr=0.016', 7030, 'stride', seeds, '0xdf8ae499')
+    },
+    {
+      label: 'Transformer `float32` (`dim=32, lr=0.008`)',
+      code: '`0xdf8ae499` *(v0.0013)*',
+      recs: getReusedSeries('L12:arch=transformer;dim=32;lr=0.008;weights=float32', 7030, 'stride', seeds, '0xdf8ae499')
+    },
+    {
+      label: 'GRU `float32` (`dim=32, lr=0.016`)',
+      code: '`0x4048aacb` *(v0.0014)*',
+      recs: getReusedSeries('L12:arch=gru;dim=32;lr=0.016;weights=float32', 7030, 'stride', seeds, '0x4048aacb')
+    },
+    {
+      label: 'GRU `float32` (`dim=32, lr=0.008`)',
+      code: '`0xdf8ae499` *(v0.0013)*',
+      recs: getReusedSeries('L12:arch=gru;dim=32;lr=0.008;weights=float32', 7030, 'stride', seeds, '0xdf8ae499')
+    }
   ];
 
-  console.log('### Table 6A: Tier 3.4 & Tier 4 Full-Book Training Pass (`7,030` Steps = 1.0 Epoch, `--stream=stride`, 3 Seeds `3, 7, 11`, `--tail 5 --final`)');
+  console.log('### Table 2A: Tier 3 Full-Book Training Pass (`7,030` Steps = 1.0 Epoch, `--stream=stride`, 3 Seeds `3, 7, 11`, `--tail 5 --final`)');
   console.log('');
-  console.log('| Architecture / Configuration | Val Mean | Mean Tail Range | Test Mean | Test Seeds (`3 / 7 / 11`) | Paired $\\Delta\\text{Test}$ vs LEARNS v0.0014 | 95% Student-$t$ CI ($df=2$) | Tier 1 Verdict |');
-  console.log('|---|---:|---:|---:|---|---:|---|---|');
+  console.log('| Architecture / Configuration | `codeHash` | Val Mean | Mean Tail Range | Test Mean | Test Seeds (`3 / 7 / 11`) | Paired $\\Delta\\text{Test}$ vs B0 | 95% Student-$t$ CI ($df=2$) | Max Tail Range | Tier 1 Verdict |');
+  console.log('|---|---|---:|---:|---:|---|---:|---|---:|---|');
 
   for (const a of arms) {
-    const recs = getSeries(a.cfg, 7030, 'stride', seeds);
-    if (recs.some(x => !x)) continue;
+    const recs = a.recs;
+    if (!recs || recs.some(x => !x)) continue;
+    const lbl = markLabelIfReused(a.label, recs);
     const valMean = fmt(mean(recs.map(x => x.valLoss)));
-    const tailRange = fmt(mean(recs.map(x => x.valTailRange)));
+    const tailRange = hasMultiTail(recs) ? fmt(mean(recs.map(x => x.valTailRange))) : '—';
     const testMean = fmt(mean(recs.map(x => x.testLoss)));
     const testSeeds = recs.map(x => fmt(x.testLoss)).join(' / ');
-    const ref = a.refRecs || baseRecs;
-    if (a.isBase || ref.some(x => !x)) {
-      console.log(`| ${a.label} | ${valMean} | ${tailRange} | **${testMean}** | ${testSeeds} | — *(baseline)* | — | **Baseline** |`);
+    if (a.isBase) {
+      console.log(`| ${lbl} | ${a.code} | ${valMean} | ${tailRange} | **${testMean}** | ${testSeeds} | — *(baseline B0)* | — | ${tailRange} | **Baseline** |`);
     } else {
-      const st = computePairedStats(ref, recs, 'testLoss');
+      const st = computePairedStats(b0FullRecs, recs, 'testLoss');
       const ciStr = `[${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}]`;
-      const note = a.refLabel ? ` *(${a.refLabel})*` : '';
-      console.log(`| ${a.label} | ${valMean} | ${tailRange} | ${testMean} | ${testSeeds} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)}${note} | \`${ciStr}\` | **${st.verdict}** |`);
+      console.log(`| ${lbl} | ${a.code} | ${valMean} | ${tailRange} | ${testMean} | ${testSeeds} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)} | \`${ciStr}\` | ${fmt(st.maxTailRange)} | **${st.verdict}** |`);
     }
   }
+  console.log('');
+  console.log('*Note: The first two rows (`LEARNS v0.0015 default B0` and `GRU ternary`) are fresh v0.0015 runs (`codeHash: 0x626fd26c`) with full 5-checkpoint tail bands (`--tail 5 --final`). Context rows marked with `†` reuse prior-release runs with their original `codeHash` (`0x4048aacb` or `0xdf8ae499`) and `reusedFrom` field preserved.*');
   console.log('');
 
   const checkpoints = [1000, 2000, 3000, 4000, 5000, 6000, 7030];
-  console.log('### Table 6B: Full-Pass Validation Learning Curves (3-Seed Mean Validation Loss in nats/byte across Checkpoints `1,000 .. 7,030`)');
+  console.log('### Table 2B: Full-Pass Validation Learning Curves (3-Seed Mean Validation Loss in nats/byte across Checkpoints `1,000 .. 7,030`)');
   console.log('');
-  console.log('| Architecture / Configuration | Step 1,000 | Step 2,000 | Step 3,000 | Step 4,000 | Step 5,000 | Step 6,000 | Step 7,030 (Final) |');
-  console.log('|---|---:|---:|---:|---:|---:|---:|---:|');
+  console.log('| Architecture / Configuration | `codeHash` | Step 1,000 | Step 2,000 | Step 3,000 | Step 4,000 | Step 5,000 | Step 6,000 | Step 7,030 (Final) |');
+  console.log('|---|---|---:|---:|---:|---:|---:|---:|---:|');
 
   for (const a of arms) {
-    if (a.refLabel) continue;
-    const recs = getSeries(a.cfg, 7030, 'stride', seeds);
-    if (recs.some(x => !x || !x.valCurve)) continue;
+    const recs = a.recs;
+    if (!recs || recs.some(x => !x || !x.valCurve)) continue;
+    const lbl = markLabelIfReused(a.label, recs);
     const cols = checkpoints.map(cp => {
       const vals = recs.map(r => {
         const pt = r.valCurve.find(p => p.step === cp);
@@ -479,15 +500,13 @@ function printTier3LongTable() {
       });
       return fmt(mean(vals));
     });
-    console.log(`| ${a.label} | ${cols.slice(0, 6).join(' | ')} | **${cols[6]}** |`);
+    console.log(`| ${lbl} | ${a.code} | ${cols.slice(0, 6).join(' | ')} | **${cols[6]}** |`);
   }
   console.log('');
 }
 
-if (secArg === 'all' || secArg === 'tier1') printTier1Table();
-if (secArg === 'all' || secArg === 'tier2') printTier2Tables();
-if (secArg === 'all' || secArg === 'tier3_lr') printTier3LRSweep();
-if (secArg === 'all' || secArg === 'tier3_main') printTier3MainTable();
-if (secArg === 'all' || secArg === 'tier3_cap') printTier3CapTable();
-if (secArg === 'all' || secArg === 'tier3_stream') printTier3StreamTable();
-if (secArg === 'all' || secArg === 'tier3_long') printTier3LongTable();
+if (secArg === 'all' || secArg === 'tier2') printTier2MainTable();
+if (secArg === 'all' || secArg === 'tier2_diag') printTier2DiagTable();
+if (secArg === 'all' || secArg === 'tier2_traj') printTier2TrajectoryTable();
+if (secArg === 'all' || secArg === 'tier2_lr') printTier2LRSweepTable();
+if (secArg === 'all' || secArg === 'tier3') printTier3Tables();

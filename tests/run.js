@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Headless experiment runner for LEARNS v0.0014: "Signal and Noise"
+// Headless experiment runner for LEARNS v0.0015: "The Partner Record"
 // Loads the marked slice /*@@LEARNS_BEGIN*/ ... /*@@LEARNS_END*/ from index.html,
 // verifies/computes CODE_HASH and CORPUS_HASH, runs deterministic 80/10/10 split,
 // supports --stream=stride|block|head (default stride), --ngramData=all|seen (default all),
 // and --tail K (default 5: scores full validation split at the final step and K-1 earlier checkpoints 10 steps apart),
 // resets recurrent state across non-contiguous chunks identically for every architecture,
 // trains for --steps, evaluates test split once at the final step only with --final,
+// records R_B diagnostics (rANorm, rBNorm, rArBCos, and rBDiagCurve over time),
 // and prints one JSON line.
 'use strict';
 const fs = require('fs');
@@ -113,11 +114,21 @@ function buildStreamStarts(streamMode, trainLen, chunkSize, steps, seed) {
     }
   }
 
+  const rBDiagSteps = new Set([
+    1,
+    Math.max(1, Math.floor(steps * 0.25)),
+    Math.max(1, Math.floor(steps * 0.5)),
+    Math.max(1, Math.floor(steps * 0.75)),
+    steps
+  ]);
+
   let prevStart = undefined;
   let recentTrainLosses = [];
   let firstTrainLoss = null, lastTrainLoss = null;
   let spikeCount = 0, maxBetaGrad = 0;
   let fpResidualSum = 0, fpItersSum = 0, fpAgreeSum = 0, diagCount = 0;
+  let recentRANorm = [], recentRBNorm = [], recentRArBCos = [];
+  const rBDiagCurve = [];
   const valCurve = [];
   const valTail = [];
 
@@ -159,14 +170,28 @@ function buildStreamStarts(streamMode, trainLen, chunkSize, steps, seed) {
         if (model.lastGradStats.spiked) spikeCount++;
         if (model.lastGradStats.maxBetaGrad > maxBetaGrad) maxBetaGrad = model.lastGradStats.maxBetaGrad;
       }
+      const curStep = step + 1;
       if (diag) {
         fpResidualSum += (diag.fpResidualAvg || 0);
         fpItersSum += (diag.fpItersAvg || 0);
         fpAgreeSum += (diag.fpAgreeAvg || 0);
         diagCount++;
+        if (diag.rANorm !== undefined) {
+          recentRANorm.push(diag.rANorm); if (recentRANorm.length > 20) recentRANorm.shift();
+          recentRBNorm.push(diag.rBNorm); if (recentRBNorm.length > 20) recentRBNorm.shift();
+          recentRArBCos.push(diag.rArBCos); if (recentRArBCos.length > 20) recentRArBCos.shift();
+          if (rBDiagSteps.has(curStep)) {
+            const avg = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
+            rBDiagCurve.push({
+              step: curStep,
+              rANorm: Number(avg(recentRANorm).toFixed(4)),
+              rBNorm: Number(avg(recentRBNorm).toFixed(4)),
+              rArBCos: Number(avg(recentRArBCos).toFixed(4))
+            });
+          }
+        }
       }
 
-      const curStep = step + 1;
       const needEarlyTail = earlyTailSteps.has(curStep);
       const needCurve = cli.curveEvery > 0 && curStep % cli.curveEvery === 0 && curStep < steps;
       if (needEarlyTail || needCurve) {
@@ -255,6 +280,10 @@ function buildStreamStarts(streamMode, trainLen, chunkSize, steps, seed) {
     fpResidual: Number((valRes.fpResidual || (diagCount ? fpResidualSum / diagCount : 0)).toFixed(6)),
     fpItersAvg: Number((valRes.fpIters || (diagCount ? fpItersSum / diagCount : 0)).toFixed(3)),
     fpAgree: Number((diagCount ? fpAgreeSum / diagCount : 0).toFixed(6)),
+    rANorm: Number((valRes.rANorm || 0).toFixed(4)),
+    rBNorm: Number((valRes.rBNorm || 0).toFixed(4)),
+    rArBCos: Number((valRes.rArBCos || 0).toFixed(6)),
+    rBDiagCurve: rBDiagCurve.length > 0 ? rBDiagCurve : undefined,
     skewCos: align ? Number((align.skewCos || 0).toFixed(6)) : 0,
     rA_bias: align ? Number((align.rA_bias || 0).toFixed(6)) : 0,
     rB_bias: align ? Number((align.rB_bias || 0).toFixed(6)) : 0,

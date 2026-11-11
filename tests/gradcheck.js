@@ -1,8 +1,10 @@
-// Full finite-difference gradient check of LEARNS v0.0014 (all Tier 2/3/4 switches including fpNorm, helixState, scoutScale, ema) and Tier 3 baselines (GRU, Transformer) over a 3-step sequence with BPTT.
+// Full finite-difference gradient check of LEARNS v0.0015 (all switches including rbMode=lookback, scoutHead=separate, fpNorm, helixState, scoutScale, ema) and Tier 3 baselines (GRU, Transformer) over a 3-step sequence with BPTT.
 // Usage:
-//   node tests/gradcheck.js                     (default LEARNS v0.0014: fpNorm=rescale;fpInject=on)
-//   node tests/gradcheck.js fpNorm=layernorm;fpInject=off (legacy v0.0011/v0.0012 default)
-//   node tests/gradcheck.js helixState=per_layer
+//   node tests/gradcheck.js                     (default LEARNS v0.0015: fpNorm=rescale;fpInject=on;scoutScale=0)
+//   node tests/gradcheck.js rbMode=lookback;lookback=16
+//   node tests/gradcheck.js rbMode=lookback;lookback=64
+//   node tests/gradcheck.js scoutScale=0.5;scoutHead=separate
+//   node tests/gradcheck.js fpNorm=layernorm;fpInject=off;scoutScale=0.5 (legacy v0.0011/v0.0012 default)
 //   node tests/gradcheck.js arch=gru            (GRU baseline)
 //   node tests/gradcheck.js arch=transformer    (Transformer baseline)
 //   node tests/gradcheck.js --all               (runs default, legacy, every switch, and every baseline)
@@ -71,6 +73,8 @@ function runGradcheckFor(specStr, verbose = true) {
 
   const recAOn = cfg.recordA !== 'off' && cfg.recordA !== false;
   const recBOn = cfg.recordB !== 'off' && cfg.recordB !== false;
+  const testScout = m.arch === 'learns' && recBOn && Number(cfg.scoutScale) > 0 && String(specStr).includes('scout');
+
   const calcH = (st) => {
     if (recAOn && recBOn) return 0.5 * (L.recordEntropy(st.R_A) + L.recordEntropy(st.R_B));
     if (recAOn) return L.recordEntropy(st.R_A);
@@ -88,22 +92,31 @@ function runGradcheckFor(specStr, verbose = true) {
       st = r.state;
     }
     const S_end = (m.arch === 'learns') ? calcH(st) : 0;
-    return { outs, st, dS: S_end - S_start };
+    const scout = testScout ? L.scoutBackwardPass(seq, m, cfg) : null;
+    return { outs, st, dS: S_end - S_start, scout };
   }
 
   function loss() {
-    const { outs, dS } = run();
+    const { outs, dS, scout } = run();
     let l = 0;
     outs.forEach((r, t) => { const p = L.softmax(r.logits); l -= Math.log(p[seq[t + 1]]); });
     let th = 0;
     if (m.arch === 'learns' && cfg.thermo !== 'off' && cfg.lambda && (recAOn || recBOn)) {
       th = cfg.thermo === 'hinge' ? cfg.lambda * Math.max(0, -dS) : -cfg.lambda * dS;
     }
-    return l / outs.length + th;
+    let scLoss = 0;
+    if (scout) {
+      for (let t = 0; t < outs.length; t++) {
+        const p = L.softmax(scout.scoutLogits[t]);
+        scLoss -= Math.log(p[scout.scoutTargets[t]]);
+      }
+      scLoss = (scLoss / outs.length) * Number(cfg.scoutScale);
+    }
+    return l / outs.length + th + scLoss;
   }
 
   m.zeroGrads();
-  const { outs, st, dS } = run();
+  const { outs, st, dS, scout } = run();
   const n = outs.length;
   let g = null;
   if (m.arch === 'learns' && cfg.thermo !== 'off' && cfg.lambda && (recAOn || recBOn)) {
@@ -123,6 +136,17 @@ function runGradcheckFor(specStr, verbose = true) {
     for (let j = 0; j < p.length; j++) p[j] /= n;
     const r = m.backward(p, outs[t].caches, cfg, g);
     g = m.arch === 'learns' ? { R_A: r.grad_R_A_prev, R_B: r.grad_R_B_prev, h: r.grad_h, hs: r.hs } : r;
+  }
+  if (scout) {
+    let gScout = null;
+    const scScale = Number(cfg.scoutScale);
+    for (let t = 0; t < n; t++) {
+      const p = Float64Array.from(L.softmax(scout.scoutLogits[t]));
+      p[scout.scoutTargets[t]] -= 1;
+      for (let j = 0; j < p.length; j++) p[j] *= scScale / n;
+      const r = m.backward(p, scout.scoutCaches[t], cfg, gScout);
+      gScout = { R_A: r.grad_R_A_prev, R_B: r.grad_R_B_prev, h: r.grad_h, hs: r.hs };
+    }
   }
 
   const eps = 1e-6;
@@ -152,6 +176,8 @@ function runGradcheckFor(specStr, verbose = true) {
 
   if (m.arch === 'learns') {
     const names = ['W_present', 'W_embed', 'W_rel', 'W_rec_A', 'W_rec_B', 'W_cross_A', 'W_cross_B', 'W_frontier', 'ln_recA_gamma', 'ln_recB_beta'];
+    if (m.W_frontier_scout) names.push('W_frontier_scout');
+    if (m.W_present_scout) names.push('W_present_scout');
     for (const k of names) chk(k, m[k], m[k + '_grad']);
     const per = ['W_A', 'W_B', 'W_gA', 'W_gB', 'W_FA', 'W_FB', 'thetas', 'rho', 'W_prog', 'W_px', 'ln_fpA_gamma', 'ln_fpB_beta', 'ln_fpAsym_gamma'];
     for (let l = 0; l < layers; l++) for (const k of per) chk(`L${l}.${k}`, m['layers_' + k][l], m['layers_' + k + '_grad'][l]);
@@ -176,18 +202,20 @@ function runGradcheckFor(specStr, verbose = true) {
     }
   }
 
-  const label = specStr === '' ? 'default v0.0014 (fpNorm=rescale;fpInject=on)' : (specStr === 'inject' ? 'with FP input injection' : specStr);
+  const label = specStr === '' ? 'default v0.0015 (fpNorm=rescale;fpInject=on;scoutScale=0)' : (specStr === 'inject' ? 'with FP input injection' : specStr);
   console.log(fails ? `${fails} FAILED (${label})` : `ALL OK (${label})`);
   return fails;
 }
 
 if (args.includes('--all')) {
   const specs = [
-    '', 'inject', 'fpNorm=layernorm;fpInject=off',
+    '', 'inject', 'fpNorm=layernorm;fpInject=off;scoutScale=0.5',
     'relEmbed=off', 'coreA=off', 'coreB=off', 'innerFP=2', 'innerFP=8',
     'fpIters=0', 'fpIters=1', 'fpIters=2', 'fpIters=6', 'fpIters=12', 'fpInject=off', 'fpInject=on',
     'fpNorm=layernorm', 'fpNorm=none', 'fpNorm=rescale', 'fpNorm=none;fpInject=off', 'fpNorm=rescale;fpInject=off',
-    'recordA=off', 'recordB=off', 'rbMode=prevrev', 'scoutScale=0',
+    'recordA=off', 'recordB=off', 'rbMode=prevrev',
+    'rbMode=lookback;lookback=16', 'rbMode=lookback;lookback=64',
+    'scoutScale=0', 'scoutScale=0.5', 'scoutScale=0.5;scoutHead=separate',
     'frontierPresent=off', 'frontierHelix=off',
     'helix=off', 'helixRotation=none', 'helixRetention=fixed', 'helixRetention=none', 'helixState=per_layer',
     'thermo=off', 'thermo=linear', 'thermo=hinge',
