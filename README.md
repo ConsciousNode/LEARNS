@@ -2,6 +2,8 @@
 
 **LEARNS** (*Logical Entropic Arrow Recursive Neuro-Symbolic Architecture*) is a self-contained, zero-dependency single-file browser language model (`index.html`) and reproducible Node.js ablation laboratory built by **ConsciousNode SoftWorks**.
 
+> **Audit (Kehai, 2026-11-11):** see [`AUDIT-v0.0016.md`](AUDIT-v0.0016.md). The instrument is honest and the main tables reproduce. On music, **GRU beats LEARNS everywhere** and **LEARNS beats the parameter-matched Transformer**. Tier 3 was incomplete, so the audit finished it: the helical *present readout* and *retention* matter, *learned vs fixed* retention doesn't, and **R_B still doesn't earn its parameters**. The rhythm hypothesis isn't supported. The crew test set is partly format-contaminated (the generator copied the crew scores' column padding), but a control shows the ranking doesn't change. Some numbers in this README don't match the tables, and the Tier 4 "refuting" claim should read *inconclusive*; the audit lists each one.
+
 ## What's New in v0.0016 ("Rhythm")
 
 1. **Tier 1 — Procedural `.loom` Music Corpus from Synth Radio (`tests/loom-corpus.js`):**
