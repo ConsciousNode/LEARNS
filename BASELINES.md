@@ -1,89 +1,30 @@
-# LEARNS v0.0015 ("The Partner Record") — Baselines Reference (`BASELINES.md`)
+# LEARNS v0.0016 — Parameter-Matched Baselines & Benchmarks (`BASELINES.md`)
 
-To evaluate what LEARNS's six paper-derived components contribute on *The Adventures of Sherlock Holmes* (`corpus.txt`, 562,404 ASCII bytes, FNV-1a `CORPUS_HASH = 0x39c84ca9`), LEARNS v0.0015 includes three standard families of baselines inside the **exact same training, chunking, and evaluation harness** (`index.html` and `tests/run.js`):
+All neural models in the LEARNS harness (`index.html` and `tests/run.js`) share the exact same byte-level vocabulary ($V = 256$), chunk length ($C = 64$), stream sampler (`--stream=stride`), AdamW optimizer ($\beta_1 = 0.9, \beta_2 = 0.999, \epsilon = 10^{-8}$), cosine learning-rate schedule with warmup (`warmup = 50`, `lrMin = 1e-5`), gradient clipping (`clipMode=global`), and absmean STE ternary quantization (`weights=ternary` vs `weights=float32`).
 
-1. **Interpolated Kneser–Ney $n$-gram tables** ($n \in \{1, 2, 3, 5\}$, both full-split `--ngramData=all` and data-matched `--ngramData=seen`).
-2. **Standard 2-layer GRU** (`arch=gru`, matched parameter count and state capacity at both `dim=32` and `dim=64`, in `weights=ternary` and `weights=float32`).
-3. **2-layer Causal Pre-LN RoPE Transformer** (`arch=transformer`, matched parameter count, in `weights=ternary` and `weights=float32`).
+## 1. Parameter-Matched Neural Architectures (`dim=32`, `layers=2`)
 
-All neural models share:
-- The same deterministic 80% / 10% / 10% contiguous byte split (`splitCorpus80_10_10`: `449,923` train / `56,240` validation / `56,241` test bytes).
-- The same chunk stream (`--stream=stride` by default: a deterministic per-epoch seeded permutation of all $7,030$ non-overlapping $64$-byte chunks covering the entire training split once per epoch; `--stream=block`: one deterministic random contiguous block of `steps * 64` bytes per seed; or `--stream=head`: the sequential v0.0011/v0.0012 schedule `start = (step * 64) % (N_train - 66)`).
-- Identical contiguity handling: whenever consecutive chunks are not adjacent (`start !== prevStart + chunkSize`), the recurrent state (`App.trainState = model.getEmptyState(); App.prevScoutRB = null;`) is reset cleanly before the chunk runs across `LEARNS`, `GRU`, and `Transformer`.
-- The same AdamW optimizer (`beta1=0.9, beta2=0.999, eps=1e-8`, weight decay `0.01` on matrix weights, `0.0` on embeddings and biases, `0.1 × lr` on LayerNorm gains/biases), linear warmup (`100` steps), cosine learning-rate decay (`cosineLR`), and L2 gradient norm clipping (`clipGradNorm` at `1.0`).
-- The same BitNet b1.58 ternary quantization function (`matvecTernary` / `matvecTernaryT`: $Q(\mathbf{W}) = \text{scale} \cdot \text{round\_clip}(\mathbf{W}/\text{scale}, -1, 1)$ with $\text{scale} = \text{mean}|\mathbf{W}|$ and straight-through estimator) when `weights=ternary`.
-- The same causal full-split evaluator (`evalFullSplit`) and 5-checkpoint tail jitter band (`--tail 5`, evaluating full validation loss at steps `S-40, S-30, S-20, S-10, S`).
+| Architecture | Config | Hidden / Head Spec | Active Parameters |
+| :--- | :--- | :--- | :---: |
+| **LEARNS (B0)** | `arch=learns;dim=32;layers=2` | $d = 32, L = 2$, $\mathbf{R}_A, \mathbf{R}_B, \mathbf{h} \in \mathbb{R}^{32}$ | **54,400** (`54,272` with `helix=off`; `51,264` with `recordB=off`) |
+| **GRU** | `arch=gru;dim=32;layers=2` | $H = \text{round}(32 \times 1.53) = 49, L = 2$ | **55,192** |
+| **Transformer** | `arch=transformer;dim=32;layers=2` | $D = 40, L = 2, n_{\text{heads}} = 4, d_{\text{ff}} = 80$, context $64$ | **54,752** |
 
----
+## 2. Non-Parametric Interpolated Kneser-Ney N-Gram Baselines
 
-## 1. Interpolated Kneser–Ney $n$-Grams (`KneserNeyModel`)
+- `unigram` ($n=1$, Laplace-smoothed byte frequencies)
+- `bigram` ($n=2$, interpolated Kneser-Ney, discount $D = 0.75$)
+- `trigram` ($n=3$, interpolated Kneser-Ney, discount $D = 0.75$)
+- `5gram` ($n=5$, interpolated Kneser-Ney, discount $D = 0.75$)
+- Evaluated under both `--ngramData=seen` (fitted strictly on the exact byte chunks seen by the 1,000-step neural models) and `--ngramData=all` (fitted on the entire training split).
 
-### Equations
-For order $M \in \{1, 2, 3, 5\}$:
-- **Order 1 (`unigram`, $M=1$)**: Add-one smoothed unigram table over vocabulary $V=256$:
-  $$P_{\text{uni}}(w) = \frac{c(w) + 1}{N_{\text{obs}} + V}$$
-- **Orders $M \in \{2, 3, 5\}$ (`bigram`, `trigram`, `5gram`)**: Recursive interpolated modified Kneser–Ney smoothing with Ney absolute discounting estimate:
-  $$D_m = \frac{n_{1,m}}{n_{1,m} + 2 n_{2,m}} \quad (1 \le m \le M)$$
-  $$P_{\text{KN}}^{(m)}(w \mid u_{t-m+1}^{t-1}) = \frac{\max(c_m(u_{t-m+1}^{t-1}, w) - D_m, 0)}{c_m(u_{t-m+1}^{t-1}, \cdot)} + \lambda(u_{t-m+1}^{t-1}) P_{\text{KN}}^{(m-1)}(w \mid u_{t-m+2}^{t-1})$$
-  $$\lambda(u_{t-m+1}^{t-1}) = \frac{D_m \cdot N_{1+}(u_{t-m+1}^{t-1}, \cdot)}{c_m(u_{t-m+1}^{t-1}, \cdot)}$$
+## 3. Benchmark Corpora in v0.0016
 
-### Full-Split (`--ngramData=all`) vs Data-Matched (`--ngramData=seen`)
-
-| Order | `--ngramData=all` (449,923 B) Test Loss (nats/B) † | `--ngramData=seen` 150 steps (`stride`, 9,600 B) † | `--ngramData=seen` 1,000 steps (`stride`, 64,000 B) † | `--ngramData=seen` 7,030 steps (`stride`, 449,920 B, 1 pass) † |
-|---|---:|---:|---:|---:|
-| **1-gram (`unigram`)** | `3.0953` | `3.1174` | `3.0988` | `3.0953` |
-| **2-gram (`bigram`)** | `2.4349` | `2.5042` | `2.4419` | `2.4349` |
-| **3-gram (`trigram`)** | `1.9358` | `2.1813` | `1.9805` | `1.9359` |
-| **5-gram (`5gram`)** | `1.4432` | `2.0412` | `1.6492` | `1.4462` |
-
----
-
-## 2. Parameter-Matched 2-Layer GRU (`GRUModel`)
-
-### Architecture & Equations
-For hidden dimension $H = 49$ (at $\text{dim}=32$) or $H = 96$ (at $\text{dim}=64$) and $L=2$ layers:
-$$\mathbf{x}_t^{(0)} = \mathbf{W}_{\text{embed}}[x_t] \in \mathbb{R}^H$$
-For layer $l \in \{0, \dots, L-1\}$:
-$$\mathbf{z}_t^{(l)} = \sigma\left(Q(\mathbf{W}_z^{(l)})[\mathbf{x}_t^{(l)}; \mathbf{h}_{t-1}^{(l)}] + \mathbf{b}_z^{(l)}\right), \qquad \mathbf{r}_t^{(l)} = \sigma\left(Q(\mathbf{W}_r^{(l)})[\mathbf{x}_t^{(l)}; \mathbf{h}_{t-1}^{(l)}] + \mathbf{b}_r^{(l)}\right)$$
-$$\tilde{\mathbf{h}}_t^{(l)} = \tanh\left(Q(\mathbf{W}_h^{(l)})[\mathbf{x}_t^{(l)}; \mathbf{r}_t^{(l)} \odot \mathbf{h}_{t-1}^{(l)}] + \mathbf{b}_h^{(l)}\right)$$
-$$\mathbf{h}_t^{(l)} = (1 - \mathbf{z}_t^{(l)}) \odot \mathbf{h}_{t-1}^{(l)} + \mathbf{z}_t^{(l)} \odot \tilde{\mathbf{h}}_t^{(l)}, \qquad \mathbf{x}_t^{(l+1)} = \mathbf{h}_t^{(l)}$$
-Readout:
-$$\text{logits}_t = Q(\mathbf{W}_{\text{out}})\mathbf{h}_t^{(L-1)} + \mathbf{b}_{\text{out}} \in \mathbb{R}^V$$
-
-### Parameter Count & State Capacity Matching (`dim=32` and `dim=64`)
-
-| Scale | Architecture | Active Parameters | Parameter Delta vs LEARNS B0 | Recurrent State Floats Carried Across Tokens |
-|---|---|---:|---:|---|
-| **`dim=32`** | **LEARNS B0 (`recordB=on`)** | `54,400` | — | **`96` floats** ($\mathbf{R}_A \in \mathbb{R}^{32}, \mathbf{R}_B \in \mathbb{R}^{32}, \mathbf{h} \in \mathbb{R}^{32}$) |
-| **`dim=32`** | **LEARNS A1 (`recordB=off`)** | `51,328` | **`-5.65%`** | **`64` floats** ($\mathbf{R}_A \in \mathbb{R}^{32}, \mathbf{h} \in \mathbb{R}^{32}$) |
-| **`dim=32`** | **LEARNS A4 (`scoutHead=separate`)** | `70,784` *(54,400 inf + 16,384 aux)* | **`+30.12%` train / `0%` inf** | **`96` floats** ($\mathbf{R}_A \in \mathbb{R}^{32}, \mathbf{R}_B \in \mathbb{R}^{32}, \mathbf{h} \in \mathbb{R}^{32}$) |
-| **`dim=32`** | **GRU ($H=49, L=2$)** | `54,450` | **`+0.09%`** | **`98` floats** ($\mathbf{h}^{(0)} \in \mathbb{R}^{49}, \mathbf{h}^{(1)} \in \mathbb{R}^{49}$) |
-| **`dim=64`** | **LEARNS (`shared`)** | `164,224` | — | **`192` floats** ($\mathbf{R}_A \in \mathbb{R}^{64}, \mathbf{R}_B \in \mathbb{R}^{64}, \mathbf{h} \in \mathbb{R}^{64}$) |
-| **`dim=64`** | **GRU ($H=96, L=2$)** | `165,914` | **`+1.03%`** | **`192` floats** ($\mathbf{h}^{(0)} \in \mathbb{R}^{96}, \mathbf{h}^{(1)} \in \mathbb{R}^{96}$) |
-
----
-
-## 3. Parameter-Matched 2-Layer Pre-LN RoPE Causal Transformer (`TransformerModel`)
-
-### Architecture & Equations
-At $\text{dim}=32$ ($d = 40$, $d_{\text{ff}} = 136$, $n_{\text{heads}} = 4$, causal window $W = 64$, $L=2$ layers):
-- Active parameters: **`54,656`** (**`+0.47%`** vs LEARNS `54,400`).
-
----
-
-## 4. Validation Learning-Rate Sweeps (`--stream=stride`, 1,000 Steps, Seed 3)
-
-Every neural configuration's learning rate was selected strictly on the validation split (`seed=3`, `1,000` steps, `--stream=stride`, test split untouched):
-
-| Model Family | Candidate `lr = 0.004` | Candidate `lr = 0.008` | Candidate `lr = 0.016` | Candidate `lr = 0.024 / 0.032` | Selected Winner (Val Loss) |
-|---|---:|---:|---:|---:|---|
-| **LEARNS B0 `scoutScale=0;rbMode=causal` (`dim=32`)** | — | `2.2434` † | **`2.1764`** | `2.2343` (`0.024`) † | **`lr = 0.016`** (`2.1764`) |
-| **LEARNS A3a `rbMode=lookback;lookback=16` (`dim=32`)** | — | `2.2293` | **`2.1841`** | `2.2587` (`0.024`) | **`lr = 0.016`** (`2.1841`) |
-| **LEARNS A3b `rbMode=lookback;lookback=64` (`dim=32`)** | — | `2.2424` | **`2.1865`** | `2.2290` (`0.024`) | **`lr = 0.016`** (`2.1865`) |
-| **LEARNS A4 `scoutScale=0.5;scoutHead=separate` (`dim=32`)** | — | `2.2489` | **`2.2031`** | `2.2110` (`0.024`) | **`lr = 0.016`** (`2.2031`) |
-| **LEARNS v0.0014 `scoutScale=0.5` (`dim=32, ternary`) †** | `2.5995` † | `2.4381` † | **`2.3220`** | — | **`lr = 0.016`** (`2.3220`) |
-| **LEARNS `weights=float32` (`dim=32`) †** | `4.5793` † | `2.2166` † | **`2.2142`** † | — | **`lr = 0.016`** (`2.2142`) |
-| **GRU `dim=32` (`weights=ternary`) †** | — | `2.0817` † | **`2.0585`** † | `2.2070` (`0.032`) † | **`lr = 0.016`** (`2.0585`) |
-| **GRU `dim=32` (`weights=float32`) †** | — | **`1.9569`** † | `1.9859` † | `2.1314` (`0.032`) † | **`lr = 0.008 / 0.016`** (`1.9569 / 1.9859`) |
-| **Transformer `dim=32` (`weights=ternary`) †** | `2.3620` † | `2.3212` † | **`2.3184`** † | — | **`lr = 0.016`** (`2.3184`) |
-| **Transformer `dim=32` (`weights=float32`) †** | `2.3245` † | **`2.3097`** † | `2.4621` † | — | **`lr = 0.008`** (`2.3097`) |
+1. **Procedural `.loom` Music Corpus (`--task=loom`, generated by `tests/loom-corpus.js` from Synth Radio v13+):**
+   - **Training (`loom-train.txt`):** `110` channels (`1,207` scores, `2,003,164` bytes, `corpusHash=0x27600ed3`).
+   - **Validation (`loom-val.txt`):** `10` channels (`125` scores, `200,261` bytes, disjoint seeds).
+   - **Unseen-Genre Test (`loom-test-unseen.json`):** `26` held-out channels (`52` scores, `74,278` bytes).
+   - **Crew Test (`loom-test-crew.json`):** `8` comment-stripped studio scores (`7,328` bytes: `peepers`, `hollow`, `hollow-2`, `threshold`, `understory`, `understory-morning`, `understory-rest`, `understory-trouble`).
+   - **Byte-Role Split:** Every target byte in `.loom` evaluation is classified into `step` (step-column bytes before the instrument thread word), `pitch` (note/chord/glide tokens `D2`, `F4+A4+C5`, `D5>E5`), or `other`.
+2. **Sherlock Holmes Prose Corpus (`--task=prose`, `corpus.txt`):**
+   - `562,404` bytes (`corpusHash=0x1c7849c3`), split deterministically `80% / 10% / 10%` into train (`449,923` B), validation (`56,240` B), and test (`56,241` B).

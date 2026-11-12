@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Automated causality leak test & lookback window equivalence proof for LEARNS v0.0015 ("The Partner Record").
+// Automated causality leak test & lookback window equivalence proof for LEARNS v0.0016 ("Rhythm").
 // Tests every rbMode:
 //   - rbMode=causal (default)
 //   - rbMode=prevrev
@@ -36,7 +36,7 @@ function runForwardChunk(model, prevChunk, chunkTokens, cfg, evalOnly = false) {
   if (rbMode === 'prevrev' && recBOn) {
     const prevScoutRB = L.scoutBackwardPass(prevChunk, model, cfg).R_B_at[0].slice();
     state = { h: state.h.slice(), hs: state.hs ? state.hs.map(x => x.slice()) : null, R_A: state.R_A.slice(), R_B: prevScoutRB, tokenHistory: state.tokenHistory.slice() };
-  } else if (rbMode === 'lookback') {
+  } else if (rbMode === 'lookback' || rbMode === 'window') {
     state = model.getEmptyState();
   }
 
@@ -114,7 +114,9 @@ function verifyLookbackScratchEquivalence(model, chunkTokens, cfg) {
     const cxB_train = L.matvecTernary(model.W_cross_B, R_A_prev_train, dim, dim);
     let rB_scratch_tr = L.zeros(dim);
     const M = Math.min(lookbackN, t + 1);
-    for (let k = 0; k < M; k++) {
+    const isForwardWindow = (cfg.rbMode === 'window');
+    for (let stepIdx = 0; stepIdx < M; stepIdx++) {
+      const k = isForwardWindow ? (M - 1 - stepIdx) : stepIdx;
       const tok_k = chunkTokens[t - k];
       const u_k = L.zeros(dim);
       for (let j = 0; j < dim; j++) {
@@ -133,7 +135,8 @@ function verifyLookbackScratchEquivalence(model, chunkTokens, cfg) {
     const K_B_eval = model._ev.KB0;
     const cxB_eval = L.matvecTernary(model.W_cross_B, R_A_prev_eval, dim, dim);
     let rB_scratch_ev = L.zeros(dim);
-    for (let k = 0; k < M; k++) {
+    for (let stepIdx = 0; stepIdx < M; stepIdx++) {
+      const k = isForwardWindow ? (M - 1 - stepIdx) : stepIdx;
       const tok_k = chunkTokens[t - k];
       const u_k = L.zeros(dim);
       for (let j = 0; j < dim; j++) {
@@ -162,6 +165,8 @@ function verifyLookbackScratchEquivalence(model, chunkTokens, cfg) {
     { name: 'rbMode=prevrev (A2)', spec: 'dim=32;layers=2;rbMode=prevrev;scoutScale=0', expectLeak: false },
     { name: 'rbMode=lookback;lookback=16 (A3-16)', spec: 'dim=32;layers=2;rbMode=lookback;lookback=16;scoutScale=0', expectLeak: false, isLookback: true },
     { name: 'rbMode=lookback;lookback=64 (A3-64)', spec: 'dim=32;layers=2;rbMode=lookback;lookback=64;scoutScale=0', expectLeak: false, isLookback: true },
+    { name: 'rbMode=window;lookback=16 (T4-W16)', spec: 'dim=32;layers=2;rbMode=window;lookback=16;scoutScale=0', expectLeak: false, isLookback: true },
+    { name: 'rbMode=window;lookback=64 (T4-W64)', spec: 'dim=32;layers=2;rbMode=window;lookback=64;scoutScale=0', expectLeak: false, isLookback: true },
     { name: 'scoutScale=0.5;scoutHead=separate (A4)', spec: 'dim=32;layers=2;rbMode=causal;scoutScale=0.5;scoutHead=separate', expectLeak: false },
     { name: 'rbMode=legacy (positive control)', spec: 'dim=32;layers=2;rbMode=legacy;scoutScale=0.5', expectLeak: true }
   ];
@@ -170,7 +175,7 @@ function verifyLookbackScratchEquivalence(model, chunkTokens, cfg) {
   const testChunk = Int32Array.from({ length: 33 }, (_, i) => (97 + (i * 29) % 26) & 0xff);
 
   let failures = 0;
-  console.log('=== LEARNS v0.0015 Causality Leak Test & Lookback Equivalence Suite ===');
+  console.log('=== LEARNS v0.0016 Causality Leak Test & Lookback/Window Equivalence Suite ===');
 
   for (const mSpec of modes) {
     const cfg = L.parseConfig(mSpec.spec, { arch: 'learns', vocab: 256, dim: 32, layers: 2, chunk: 32 });

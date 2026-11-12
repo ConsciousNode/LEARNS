@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LEARNS v0.0015: The Partner Record — ConsciousNode SoftWorks</title>
+<title>LEARNS v0.0016: Rhythm — ConsciousNode SoftWorks</title>
 <!--
-  LEARNS v0.0015 — THE PARTNER RECORD
+  LEARNS v0.0016 — RHYTHM
   Logical Entropic Arrow Recursive Neuro-Symbolic Architecture
   ConsciousNode SoftWorks — November 2026
 
@@ -18,7 +18,30 @@
     6. Thermodynamic Loss         — from The Past Is Still The Future
 
   Authors: Kham Kizer · Kehai Interim (spec)
-  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009) · Kehai Interim (v0.0010, v0.0011, v0.0012, v0.0013, v0.0014, v0.0015)
+  Build:   Ed Interim (v0.0001, v0.0002, v0.0004, v0.0005) · Kehai Interim (v0.0003 patch) · Vael Interim (v0.0006, v0.0007) · Komorebi (v0.0008) · Ed Interim (v0.0009) · Kehai Interim (v0.0010, v0.0011, v0.0012, v0.0013, v0.0014, v0.0015, v0.0016)
+
+  v0.0016 (Kehai Interim + Kham, Nov 11 2026) — RHYTHM.
+  Tests whether LEARNS's components — especially the Helical State (Givens rotation + learned
+  retention, a built-in phase and timescale) — give it an edge on music written as text in
+  AuraLoom's .loom score format, and runs the look-back walk-order control on prose:
+  - TIER 1 PROCEDURAL .LOOM CORPUS (tests/loom-corpus.js):
+    * Lifts Synth Radio v13+'s composition engine (146 seeded channels across 12 genre clusters,
+      Euclidean rhythms, diatonic harmony, voice roles) and exports comment-free .loom scores
+      validated against AuraLoom's weaveScore parser (10,000 / 10,000 exports valid, 0 errors).
+    * Channel split (seed=20261111): 110 training channels (~2 MB), 10 validation channels (~200 KB),
+      and 26 held-out unseen-genre test channels, plus the 8 comment-stripped crew scores (peepers,
+      hollow, hollow-2, threshold, understory, understory-morning, understory-rest, understory-trouble).
+  - TIER 2 & 3 .LOOM BENCHMARK & HELIX / RHYTHM ABLATIONS:
+    * Benchmarks parameter-matched LEARNS (B0), GRU, and Transformer (ternary & float32, 5 seeds,
+      1,000 steps, --tail 5) on generated validation, 26 unseen genres, and 8 crew scores, with
+      loss split by byte role (step-column bytes, pitch tokens, and other bytes).
+    * Ablates helix=off, helixRotation=none, helixRetention=fixed|none, frontierPresent=off, and
+      recordB=off on the .loom benchmark to test where any advantage or cost lives.
+  - TIER 4 LOOK-BACK WALK-ORDER CONTROL (rbMode=window):
+    * Adds rbMode=window: walks the N-byte window forward from x_{t-N+1} to x_t starting from 0
+      with exact BPTT, testing whether v0.0015's rbMode=lookback deficit came from backward walk
+      order (washing out recent bytes) vs finite window resetting.
+  - format: writes 0.0016; import reads 0.0005-0.0016.
 
   v0.0015 (Kehai Interim + Kham, Nov 10 2026) — THE PARTNER RECORD.
   Investigates Component 4 (It's Time To Toss The Dice: the dyadic record split R_A / R_B) after
@@ -395,8 +418,8 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
 <body>
 
 <div id="header">
-  <h1>LEARNS v0.0015</h1>
-  <span class="sub">The Partner Record — ConsciousNode SoftWorks</span>
+  <h1>LEARNS v0.0016</h1>
+  <span class="sub">Rhythm — ConsciousNode SoftWorks</span>
   <div id="token-pill" style="display:flex;align-items:center;gap:10px;font-size:11px;color:var(--text-dim);margin-left:10px;flex-wrap:wrap;">
     <span>CODE <b id="tc-codehash" style="color:var(--accent);">—</b></span>
     <span>CORPUS_H <b id="tc-corpushash" style="color:var(--accent);">—</b></span>
@@ -551,6 +574,7 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
         <select class="num-input" id="cfg-rbmode" onchange="syncSwitchesFromLeft()">
           <option value="causal" selected>causal (carry — leak-free)</option>
           <option value="lookback">lookback (rolling backward past window — leak-free)</option>
+          <option value="window">window (rolling forward past window — leak-free)</option>
           <option value="prevrev">prevrev (reversed prev chunk — leak-free)</option>
           <option value="legacy">legacy (injects future — LEAKS target)</option>
         </select>
@@ -857,6 +881,7 @@ textarea.num-input{resize:vertical;min-height:70px;line-height:1.5;}
             <select class="num-input" id="sw-rbMode" onchange="syncSwitchesFromBoard()">
               <option value="causal" selected>causal — carry forward (default)</option>
               <option value="lookback">lookback — rolling backward past window (v0.0015)</option>
+              <option value="window">window — rolling forward past window (v0.0016)</option>
               <option value="prevrev">prevrev — seed from reversed prev chunk</option>
               <option value="legacy">legacy — future scout (leaks target)</option>
             </select>
@@ -1115,7 +1140,7 @@ const DEFAULT_SWITCHES = {
   ema: 'off',              // off | on
   recordA: 'on',           // on | off
   recordB: 'on',           // on | off
-  rbMode: 'causal',        // causal | prevrev | lookback | legacy
+  rbMode: 'causal',        // causal | prevrev | lookback | window | legacy
   frontierPresent: 'on',   // on | off
   frontierHelix: 'on',     // on | off
   helix: 'on',             // on | off
@@ -1227,7 +1252,7 @@ function serializeConfig(cfg = {}, compact = true) {
   const pairs = [];
   for (const k of SWITCH_KEYS_ORDER) {
     if (k === 'lookback') {
-      if (c.rbMode === 'lookback' || (!compact && c.lookback !== DEFAULT_SWITCHES.lookback)) {
+      if (c.rbMode === 'lookback' || c.rbMode === 'window' || (!compact && c.lookback !== DEFAULT_SWITCHES.lookback)) {
         pairs.push(`lookback=${c.lookback}`);
       }
       continue;
@@ -2229,13 +2254,14 @@ class LEARNSModel {
       Ka.fill(0);
     }
     if (recBOn) {
-      if (rbMode === 'lookback' && !cfg.isScout) {
+      if ((rbMode === 'lookback' || rbMode === 'window') && !cfg.isScout) {
         const seenLen = tokenHistory.length + 1;
         const M = Math.min(lookbackN, seenLen);
         if (recAOn) matvecTernaryInto(this.W_cross_B, R_A, dim, dim, cx); else cx.fill(0);
         R_B.fill(0);
         const u_k = ev.b_t;
-        for (let k = 0; k < M; k++) {
+        for (let stepIdx = 0; stepIdx < M; stepIdx++) {
+          const k = (rbMode === 'window') ? (M - 1 - stepIdx) : stepIdx;
           const tok_k = (k === 0) ? tokenId : tokenHistory[tokenHistory.length - k];
           const embBase = tok_k * dim;
           if (k === 0) {
@@ -2276,7 +2302,7 @@ class LEARNSModel {
       for (let i = 0; i < vocab; i++) logits[i] += ev.lp[i];
     }
 
-    const maxHist = rbMode === 'lookback' ? Math.max(this.K_hist, lookbackN) : this.K_hist;
+    const maxHist = (rbMode === 'lookback' || rbMode === 'window') ? Math.max(this.K_hist, lookbackN) : this.K_hist;
     tokenHistory.push(tokenId);
     if (tokenHistory.length > maxHist) tokenHistory.shift();
 
@@ -2442,13 +2468,14 @@ class LEARNSModel {
     const lookbackN = Math.max(1, Number(cfg.lookback) || 16);
     let R_B_new, ln_recB_cache = null, lookbackSteps = null;
     if (recBOn) {
-      if (rbMode === 'lookback' && !cfg.isScout) {
+      if ((rbMode === 'lookback' || rbMode === 'window') && !cfg.isScout) {
         const seenLen = tokenHistory.length + 1;
         const M = Math.min(lookbackN, seenLen);
         const cxB = recAOn ? matvecTernary(this.W_cross_B, R_A_prev, dim, dim) : zeros(dim);
         let rB = zeros(dim);
         lookbackSteps = [];
-        for (let k = 0; k < M; k++) {
+        for (let stepIdx = 0; stepIdx < M; stepIdx++) {
+          const k = (rbMode === 'window') ? (M - 1 - stepIdx) : stepIdx;
           const tok_k = (k === 0) ? tokenId : tokenHistory[tokenHistory.length - k];
           const u_k = new Float32Array(dim);
           const embBase = tok_k * dim;
@@ -2461,7 +2488,7 @@ class LEARNSModel {
           const sum_k = new Float32Array(dim);
           for (let j = 0; j < dim; j++) sum_k[j] = rB[j] + Kb_k[j] + cxB[j];
           const resB = layerNorm(sum_k, this.ln_recB_gamma, this.ln_recB_beta, 1e-5, !!cfg.evalOnly);
-          lookbackSteps.push({ tok_k, u_k, cache: resB.cache });
+          lookbackSteps.push({ k, tok_k, u_k, cache: resB.cache });
           rB = resB.out;
         }
         R_B_new = rB;
@@ -2504,7 +2531,7 @@ class LEARNSModel {
     const S_A_end = (recAOn && !cfg.evalOnly && !cfg.skipDiag) ? recordEntropy(R_A_new) : 0;
     const S_B_end = (recBOn && !cfg.evalOnly && !cfg.skipDiag) ? recordEntropy(R_B_new) : 0;
     const fEnt = (cfg.evalOnly || cfg.skipDiag) ? 0 : entropy(softmax(logits));
-    const maxHist = rbMode === 'lookback' ? Math.max(this.K_hist, lookbackN) : this.K_hist;
+    const maxHist = (rbMode === 'lookback' || rbMode === 'window') ? Math.max(this.K_hist, lookbackN) : this.K_hist;
     const newHistory = [...tokenHistory, tokenId];
     if (newHistory.length > maxHist) newHistory.shift();
 
@@ -2572,8 +2599,8 @@ class LEARNSModel {
       if (caches.lookbackSteps) {
         let g_rB = gRB_new.slice();
         const g_cxB_total = zeros(dim);
-        for (let k = caches.lookbackSteps.length - 1; k >= 0; k--) {
-          const st = caches.lookbackSteps[k];
+        for (let s = caches.lookbackSteps.length - 1; s >= 0; s--) {
+          const st = caches.lookbackSteps[s];
           const lnB = LNb(g_rB, st.cache, this.ln_recB_gamma);
           acc(this.ln_recB_gamma_grad, lnB.grad_gamma); acc(this.ln_recB_beta_grad, lnB.grad_beta);
           const g_sum = lnB.grad_x;
@@ -2583,7 +2610,7 @@ class LEARNSModel {
           const g_uk = matvecTernaryT(this.W_rec_B, g_sum, dim, dim);
           const embBase = st.tok_k * dim;
           for (let j = 0; j < dim; j++) this.W_embed_grad[embBase + j] += g_uk[j];
-          if (k === 0) gK_B_rec = g_uk;
+          if (st.k === 0) gK_B_rec = g_uk;
         }
         if (recAOn) {
           outer(this.W_cross_B_grad, caches.R_A_prev, g_cxB_total, dim, dim);
@@ -5343,7 +5370,7 @@ function exportModel(silent=false) {
   const skipOptim = document.getElementById('chk-save-optim') && document.getElementById('chk-save-optim').checked;
   const ser = serializeModelWeights(m, App.trainState, !skipOptim);
   const data = {
-    version: '0.0015',
+    version: '0.0016',
     step: App.step,
     codeHash: App.codeHash || '',
     corpusHash: App.corpusHash || '',
@@ -5362,7 +5389,7 @@ function exportModel(silent=false) {
   const a = document.createElement('a');
   a.href = url;
   const exportName = document.getElementById('cfg-export-name').value.trim();
-  const baseName = exportName || 'learns-v0.0015';
+  const baseName = exportName || 'learns-v0.0016';
   a.download = `${baseName}-step${App.step}.learns`;
   if (!silent) a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -5376,8 +5403,8 @@ function importModel(input) {
   reader.onload = (e) => {
     try {
       const data = JSON.parse(e.target.result);
-      if (!['0.0005','0.0006','0.0007','0.0008','0.0009','0.0010','0.0011','0.0012','0.0013','0.0014','0.0015'].includes(data.version)) {
-        showToast('Incompatible .learns version ' + data.version + ' (reads v0.0005 to v0.0015)');
+      if (!['0.0005','0.0006','0.0007','0.0008','0.0009','0.0010','0.0011','0.0012','0.0013','0.0014','0.0015','0.0016'].includes(data.version)) {
+        showToast('Incompatible .learns version ' + data.version + ' (reads v0.0005 to v0.0016)');
         return;
       }
       Tokenizer.deserialize(data.tokenizer);

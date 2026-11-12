@@ -1,6 +1,6 @@
-// Full finite-difference gradient check of LEARNS v0.0015 (all switches including rbMode=lookback, scoutHead=separate, fpNorm, helixState, scoutScale, ema) and Tier 3 baselines (GRU, Transformer) over a 3-step sequence with BPTT.
+// Full finite-difference gradient check of LEARNS v0.0016 (all switches including rbMode=lookback, scoutHead=separate, fpNorm, helixState, scoutScale, ema) and Tier 3 baselines (GRU, Transformer) over a 3-step sequence with BPTT.
 // Usage:
-//   node tests/gradcheck.js                     (default LEARNS v0.0015: fpNorm=rescale;fpInject=on;scoutScale=0)
+//   node tests/gradcheck.js                     (default LEARNS v0.0016: fpNorm=rescale;fpInject=on;scoutScale=0)
 //   node tests/gradcheck.js rbMode=lookback;lookback=16
 //   node tests/gradcheck.js rbMode=lookback;lookback=64
 //   node tests/gradcheck.js scoutScale=0.5;scoutHead=separate
@@ -215,6 +215,7 @@ if (args.includes('--all')) {
     'fpNorm=layernorm', 'fpNorm=none', 'fpNorm=rescale', 'fpNorm=none;fpInject=off', 'fpNorm=rescale;fpInject=off',
     'recordA=off', 'recordB=off', 'rbMode=prevrev',
     'rbMode=lookback;lookback=16', 'rbMode=lookback;lookback=64',
+    'rbMode=window;lookback=16', 'rbMode=window;lookback=64',
     'scoutScale=0', 'scoutScale=0.5', 'scoutScale=0.5;scoutHead=separate',
     'frontierPresent=off', 'frontierHelix=off',
     'helix=off', 'helixRotation=none', 'helixRetention=fixed', 'helixRetention=none', 'helixState=per_layer',

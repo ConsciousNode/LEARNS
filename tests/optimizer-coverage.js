@@ -1,5 +1,5 @@
 // Does optimizerStep actually apply every gradient that backward() computes?
-// Verifies LEARNS v0.0015 (across all switches including rbMode=lookback, scoutHead=separate, fpNorm, helixState, scoutScale, ema) and every Tier 3 baseline (GRU, Transformer).
+// Verifies LEARNS v0.0016 (across all switches including rbMode=lookback, scoutHead=separate, fpNorm, helixState, scoutScale, ema) and every Tier 3 baseline (GRU, Transformer).
 // Usage:
 //   node tests/optimizer-coverage.js [file.html] [switch=val | arch=gru | arch=transformer | --all]
 const path = require('path');
@@ -65,6 +65,7 @@ async function checkCoverageFor(specStr, verbose = true) {
       'fpNorm=layernorm', 'fpNorm=none', 'fpNorm=rescale', 'fpNorm=none;fpInject=off', 'fpNorm=rescale;fpInject=off',
       'recordA=off', 'recordB=off', 'rbMode=prevrev',
       'rbMode=lookback;lookback=16', 'rbMode=lookback;lookback=64',
+      'rbMode=window;lookback=16', 'rbMode=window;lookback=64',
       'scoutScale=0', 'scoutScale=0.5', 'scoutScale=0.5;scoutHead=separate',
       'frontierPresent=off', 'frontierHelix=off',
       'helix=off', 'helixRotation=none', 'helixRetention=fixed', 'helixRetention=none', 'helixState=per_layer',

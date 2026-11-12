@@ -1,19 +1,21 @@
 #!/usr/bin/env node
-// Headless experiment runner for LEARNS v0.0015: "The Partner Record"
+// Headless experiment runner for LEARNS v0.0016: "Rhythm"
 // Loads the marked slice /*@@LEARNS_BEGIN*/ ... /*@@LEARNS_END*/ from index.html,
-// verifies/computes CODE_HASH and CORPUS_HASH, runs deterministic 80/10/10 split,
+// verifies/computes CODE_HASH and CORPUS_HASH, runs deterministic 80/10/10 prose split
+// or procedural .loom music benchmark (--task=loom),
 // supports --stream=stride|block|head (default stride), --ngramData=all|seen (default all),
 // and --tail K (default 5: scores full validation split at the final step and K-1 earlier checkpoints 10 steps apart),
 // resets recurrent state across non-contiguous chunks identically for every architecture,
-// trains for --steps, evaluates test split once at the final step only with --final,
-// records R_B diagnostics (rANorm, rBNorm, rArBCos, and rBDiagCurve over time),
-// and prints one JSON line.
+// trains for --steps, evaluates test split(s) once at the final step only with --final,
+// computes byte-role loss breakdown (step / pitch / other) as well as per-channel (26 unseen genres)
+// and per-score (8 crew scores) losses on .loom, and prints one JSON line.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 
 function parseArgs(argv) {
   const out = {
+    task: 'prose',
     corpus: 'corpus.txt',
     arch: null,
     config: '',
@@ -32,6 +34,8 @@ function parseArgs(argv) {
     const a = argv[i];
     const next = () => argv[++i];
     if (a === '--final') { out.final = true; continue; }
+    if (a === '--task') { out.task = String(next()).toLowerCase(); continue; }
+    if (a.startsWith('--task=')) { out.task = a.slice(7).toLowerCase(); continue; }
     if (a === '--corpus') { out.corpus = next(); continue; }
     if (a.startsWith('--corpus=')) { out.corpus = a.slice(9); continue; }
     if (a === '--arch') { out.arch = next(); continue; }
@@ -55,17 +59,69 @@ function parseArgs(argv) {
     if (a === '--file') { out.file = next(); continue; }
     if (a.startsWith('--file=')) { out.file = a.slice(7); continue; }
   }
+  if (out.corpus.includes('loom-train')) out.task = 'loom';
   return out;
 }
 
 const cli = parseArgs(process.argv.slice(2));
-const htmlPath = cli.file || (fs.existsSync(path.join(__dirname, '..', 'index.html')) ? path.join(__dirname, '..', 'index.html') : path.resolve('index.html'));
+const rootDir = path.join(__dirname, '..');
+const htmlPath = cli.file || (fs.existsSync(path.join(rootDir, 'index.html')) ? path.join(rootDir, 'index.html') : path.resolve('index.html'));
 const L = require('./load.js')(htmlPath, { f64: false, ternary: true });
-
-const corpusPath = fs.existsSync(cli.corpus) ? cli.corpus : path.join(__dirname, '..', cli.corpus);
-const corpusBytes = fs.readFileSync(corpusPath);
-const CORPUS_HASH = L.fnv1aBytes(corpusBytes);
 const CODE_HASH = L.CODE_HASH;
+
+const isLoomTask = cli.task === 'loom';
+const loomCorpusMod = isLoomTask ? require('./loom-corpus.js') : null;
+
+let CORPUS_HASH;
+let train, val, test;
+let valRoles = null;
+let unseenChannels = null;
+let crewScores = null;
+
+L.Tokenizer.useByteLevel();
+
+if (isLoomTask) {
+  const trainPath = path.join(rootDir, 'loom-train.txt');
+  const valPath = path.join(rootDir, 'loom-val.txt');
+  const unseenJsonPath = path.join(rootDir, 'loom-test-unseen.json');
+  const crewJsonPath = path.join(rootDir, 'loom-test-crew.json');
+  const trainBytes = fs.readFileSync(trainPath);
+  const valBytes = fs.readFileSync(valPath);
+  CORPUS_HASH = L.fnv1aBytes(trainBytes);
+  train = Int32Array.from(trainBytes);
+  val = Int32Array.from(valBytes);
+  valRoles = loomCorpusMod.classifyLoomByteRoles(valBytes);
+  unseenChannels = JSON.parse(fs.readFileSync(unseenJsonPath, 'utf8')).map(ch => {
+    const buf = Buffer.from(ch.text, 'utf8');
+    return {
+      id: ch.id,
+      name: ch.name,
+      cluster: ch.cluster,
+      bytes: buf.length,
+      tokens: Int32Array.from(buf),
+      roles: loomCorpusMod.classifyLoomByteRoles(buf)
+    };
+  });
+  crewScores = JSON.parse(fs.readFileSync(crewJsonPath, 'utf8')).map(sc => {
+    const buf = Buffer.from(sc.text, 'utf8');
+    return {
+      id: sc.id,
+      author: sc.author,
+      bytes: buf.length,
+      tokens: Int32Array.from(buf),
+      roles: loomCorpusMod.classifyLoomByteRoles(buf)
+    };
+  });
+} else {
+  const corpusPath = fs.existsSync(cli.corpus) ? cli.corpus : path.join(rootDir, cli.corpus);
+  const corpusBytes = fs.readFileSync(corpusPath);
+  CORPUS_HASH = L.fnv1aBytes(corpusBytes);
+  const allTokens = Int32Array.from(corpusBytes);
+  const sp = L.splitCorpus80_10_10(allTokens);
+  train = sp.train;
+  val = sp.val;
+  test = sp.test;
+}
 
 const baseCfg = {};
 if (cli.arch) baseCfg.arch = cli.arch;
@@ -78,14 +134,168 @@ if (cli.arch) {
   else if (cfg.arch === '5gram' || cfg.arch === 'fivegram') cfg.ngramOrder = 5;
 }
 
-L.Tokenizer.useByteLevel();
-const allTokens = Int32Array.from(corpusBytes);
-const { train, val, test } = L.splitCorpus80_10_10(allTokens);
-
 function buildStreamStarts(streamMode, trainLen, chunkSize, steps, seed) {
   if (streamMode === 'stride') return L.buildStrideStarts(trainLen, chunkSize, steps, seed);
   if (streamMode === 'block') return L.buildBlockStarts(trainLen, chunkSize, steps, seed);
   return Int32Array.from({ length: steps }, (_, s) => (s * chunkSize) % Math.max(1, trainLen - chunkSize - 2));
+}
+
+/**
+ * Evaluates a token sequence `splitTokens` with optional `roleMask` (0=other, 1=step, 2=pitch).
+ * Uses the exact same forward/chunk logic and numerical stability as L.evalFullSplit, while also
+ * accumulating per-role NLL and counts in a single pass.
+ */
+function evalSplitWithRoles(splitTokens, roleMask, model, cfg = {}, chunkSize = 64) {
+  const M = splitTokens.length;
+  if (M < 2) {
+    return {
+      loss: 0, bpb: 0, nll: 0, count: 0,
+      roleNLL: [0, 0, 0], roleCount: [0, 0, 0],
+      roleLoss: { other: 0, step: 0, pitch: 0 },
+      fpResidual: 0, fpIters: 0, rANorm: 0, rBNorm: 0, rArBCos: 0
+    };
+  }
+
+  const roleNLL = [0, 0, 0];
+  const roleCount = [0, 0, 0];
+
+  if (model.arch === 'ngram') {
+    let nll = 0;
+    const hist = [];
+    for (let i = 0; i < M - 1; i++) {
+      hist.push(splitTokens[i]);
+      if (hist.length > model.order - 1 && model.order > 1) hist.shift();
+      const target = splitTokens[i + 1];
+      const p = model.prob(target, model.order > 1 ? hist : []);
+      const stepLoss = -Math.log(p + 1e-12);
+      nll += stepLoss;
+      const r = roleMask ? roleMask[i + 1] : 0;
+      roleNLL[r] += stepLoss;
+      roleCount[r]++;
+    }
+    const count = M - 1;
+    const loss = nll / count;
+    const bpb = (nll / Math.LN2) / count;
+    return {
+      loss, bpb, nll, count,
+      roleNLL, roleCount,
+      roleLoss: {
+        other: roleCount[0] > 0 ? roleNLL[0] / roleCount[0] : null,
+        step:  roleCount[1] > 0 ? roleNLL[1] / roleCount[1] : null,
+        pitch: roleCount[2] > 0 ? roleNLL[2] / roleCount[2] : null
+      },
+      fpResidual: 0, fpIters: 0, rANorm: 0, rBNorm: 0, rArBCos: 0
+    };
+  }
+
+  const evalCfg = Object.assign({}, cfg, { evalOnly: true });
+  let state = model.getEmptyState();
+  let prevScoutRB = null;
+  const rbMode = cfg.rbMode || 'causal';
+  const recBOn = cfg.recordB !== 'off' && cfg.recordB !== false;
+  let totalNLL = 0, totalRes = 0, totalIters = 0, stepsCount = 0;
+  let totalRANorm = 0, totalRBNorm = 0, totalRArBCos = 0;
+
+  for (let start = 0; start < M - 1; start += chunkSize) {
+    const end = Math.min(M - 1, start + chunkSize);
+    const chunkLen = end - start;
+    if (model.arch === 'transformer') {
+      state = model.getEmptyState();
+    } else if (model.arch === 'learns' && rbMode === 'prevrev' && recBOn && prevScoutRB) {
+      state = { h: state.h, hs: state.hs, R_A: state.R_A, R_B: prevScoutRB.slice(), tokenHistory: state.tokenHistory };
+    }
+    for (let t = 0; t < chunkLen; t++) {
+      const idx = start + t;
+      const tok = splitTokens[idx];
+      const target = splitTokens[idx + 1];
+      const { logits, state: ns, diagnostics } = model.forward(tok, state, evalCfg);
+      let mx = -Infinity;
+      for (let i = 0; i < logits.length; i++) if (logits[i] > mx) mx = logits[i];
+      let sm = 0;
+      for (let i = 0; i < logits.length; i++) sm += Math.exp(logits[i] - mx);
+      const pT = Math.exp(logits[target] - mx) / sm;
+      const stepLoss = -Math.log(pT + 1e-10);
+      totalNLL += stepLoss;
+      const r = roleMask ? roleMask[idx + 1] : 0;
+      roleNLL[r] += stepLoss;
+      roleCount[r]++;
+      if (diagnostics) {
+        totalRes += (diagnostics.fpResidualAvg || 0);
+        totalIters += (diagnostics.fpItersAvg || 0);
+        totalRANorm += (diagnostics.rANorm || 0);
+        totalRBNorm += (diagnostics.rBNorm || 0);
+        totalRArBCos += (diagnostics.rArBCos || 0);
+      }
+      stepsCount++;
+      state = ns;
+    }
+    if (model.arch === 'learns' && rbMode === 'prevrev' && recBOn) {
+      const subChunk = splitTokens.subarray ? splitTokens.subarray(start, end + 1) : splitTokens.slice(start, end + 1);
+      prevScoutRB = L.scoutBackwardPass(subChunk, model, cfg).R_B_at[0].slice();
+    }
+  }
+
+  const loss = totalNLL / Math.max(1, stepsCount);
+  const bpb = (totalNLL / Math.LN2) / Math.max(1, stepsCount);
+  return {
+    loss, bpb, nll: totalNLL, count: stepsCount,
+    roleNLL, roleCount,
+    roleLoss: {
+      other: roleCount[0] > 0 ? roleNLL[0] / roleCount[0] : null,
+      step:  roleCount[1] > 0 ? roleNLL[1] / roleCount[1] : null,
+      pitch: roleCount[2] > 0 ? roleNLL[2] / roleCount[2] : null
+    },
+    fpResidual: stepsCount ? totalRes / stepsCount : 0,
+    fpIters: stepsCount ? totalIters / stepsCount : 0,
+    rANorm: stepsCount ? totalRANorm / stepsCount : 0,
+    rBNorm: stepsCount ? totalRBNorm / stepsCount : 0,
+    rArBCos: stepsCount ? totalRArBCos / stepsCount : 0
+  };
+}
+
+function evalCollectionWithRoles(items, model, cfg, chunkSize) {
+  let totalNLL = 0, totalCount = 0;
+  const roleNLL = [0, 0, 0];
+  const roleCount = [0, 0, 0];
+  const byId = {};
+  let sumItemLoss = 0;
+
+  for (const item of items) {
+    const r = evalSplitWithRoles(item.tokens, item.roles, model, cfg, chunkSize);
+    totalNLL += r.nll;
+    totalCount += r.count;
+    for (let k = 0; k < 3; k++) {
+      roleNLL[k] += r.roleNLL[k];
+      roleCount[k] += r.roleCount[k];
+    }
+    sumItemLoss += r.loss;
+    byId[item.id] = {
+      loss: Number(r.loss.toFixed(6)),
+      bpb: Number(r.bpb.toFixed(6)),
+      stepLoss: r.roleLoss.step !== null ? Number(r.roleLoss.step.toFixed(6)) : null,
+      pitchLoss: r.roleLoss.pitch !== null ? Number(r.roleLoss.pitch.toFixed(6)) : null,
+      otherLoss: r.roleLoss.other !== null ? Number(r.roleLoss.other.toFixed(6)) : null,
+      bytes: r.count
+    };
+  }
+
+  const loss = totalNLL / Math.max(1, totalCount);
+  const bpb = (totalNLL / Math.LN2) / Math.max(1, totalCount);
+  const itemMeanLoss = items.length > 0 ? sumItemLoss / items.length : 0;
+  return {
+    loss: Number(loss.toFixed(6)),
+    bpb: Number(bpb.toFixed(6)),
+    itemMeanLoss: Number(itemMeanLoss.toFixed(6)),
+    roleLoss: {
+      step:  roleCount[1] > 0 ? Number((roleNLL[1] / roleCount[1]).toFixed(6)) : null,
+      pitch: roleCount[2] > 0 ? Number((roleNLL[2] / roleCount[2]).toFixed(6)) : null,
+      other: roleCount[0] > 0 ? Number((roleNLL[0] / roleCount[0]).toFixed(6)) : null,
+      stepBytes: roleCount[1],
+      pitchBytes: roleCount[2],
+      otherBytes: roleCount[0]
+    },
+    byId
+  };
 }
 
 (async () => {
@@ -223,13 +433,28 @@ function buildStreamStarts(streamMode, trainLen, chunkSize, steps, seed) {
   const trainCpuSec = Math.max(1e-6, (trnCpu.user + trnCpu.system - evalCpuUs) / 1e6);
   const trainSec = Math.max(1e-6, (Date.now() - trnT0 - evalMs) / 1000);
 
-  const valRes = L.evalFullSplit(val, model, cfg, chunkSize);
+  const valRes = isLoomTask
+    ? evalSplitWithRoles(val, valRoles, model, cfg, chunkSize)
+    : L.evalFullSplit(val, model, cfg, chunkSize);
   const valLossFinal = Number(valRes.loss.toFixed(6));
   valTail.push([steps, valLossFinal]);
   if (model.arch !== 'ngram' && cli.curveEvery > 0 && steps > 0) {
     valCurve.push({ step: steps, valLoss: valLossFinal, valBpb: Number(valRes.bpb.toFixed(6)) });
   }
-  const testRes = cli.final ? L.evalFullSplit(test, model, cfg, chunkSize) : null;
+
+  let testRes = null;
+  let unseenRes = null;
+  let crewRes = null;
+  if (cli.final) {
+    if (isLoomTask) {
+      unseenRes = evalCollectionWithRoles(unseenChannels, model, cfg, chunkSize);
+      crewRes = evalCollectionWithRoles(crewScores, model, cfg, chunkSize);
+      testRes = { loss: unseenRes.loss, bpb: unseenRes.bpb };
+    } else {
+      testRes = L.evalFullSplit(test, model, cfg, chunkSize);
+    }
+  }
+
   const wallSec = (Date.now() - wallT0) / 1000;
 
   const tailVals = valTail.map(x => x[1]);
@@ -252,6 +477,7 @@ function buildStreamStarts(streamMode, trainLen, chunkSize, steps, seed) {
   const record = {
     codeHash: CODE_HASH,
     corpusHash: CORPUS_HASH,
+    task: isLoomTask ? 'loom' : undefined,
     arch: cfg.arch,
     config: L.serializeConfig(cfg, true),
     stream: cli.stream,
@@ -264,6 +490,11 @@ function buildStreamStarts(streamMode, trainLen, chunkSize, steps, seed) {
     trainLossLast: lastTrainLoss,
     valLoss: valLossFinal,
     valBpb: Number(valRes.bpb.toFixed(6)),
+    valRoleLoss: isLoomTask && valRes.roleLoss ? {
+      step:  valRes.roleLoss.step !== null ? Number(valRes.roleLoss.step.toFixed(6)) : null,
+      pitch: valRes.roleLoss.pitch !== null ? Number(valRes.roleLoss.pitch.toFixed(6)) : null,
+      other: valRes.roleLoss.other !== null ? Number(valRes.roleLoss.other.toFixed(6)) : null
+    } : undefined,
     valTail,
     valTailMin,
     valTailMax,
@@ -271,6 +502,14 @@ function buildStreamStarts(streamMode, trainLen, chunkSize, steps, seed) {
     valTailRange,
     testLoss: testRes ? Number(testRes.loss.toFixed(6)) : null,
     testBpb: testRes ? Number(testRes.bpb.toFixed(6)) : null,
+    unseenTestLoss: unseenRes ? unseenRes.loss : undefined,
+    unseenChannelMeanLoss: unseenRes ? unseenRes.itemMeanLoss : undefined,
+    unseenRoleLoss: unseenRes ? unseenRes.roleLoss : undefined,
+    unseenByChannel: unseenRes ? unseenRes.byId : undefined,
+    crewTestLoss: crewRes ? crewRes.loss : undefined,
+    crewScoreMeanLoss: crewRes ? crewRes.itemMeanLoss : undefined,
+    crewRoleLoss: crewRes ? crewRes.roleLoss : undefined,
+    crewByScore: crewRes ? crewRes.byId : undefined,
     bitsPerByte: Number((testRes ? testRes.bpb : valRes.bpb).toFixed(6)),
     wallClockSec: Number(wallSec.toFixed(2)),
     trainSec: Number(trainSec.toFixed(2)),

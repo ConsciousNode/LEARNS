@@ -1,512 +1,289 @@
 #!/usr/bin/env node
-// Paired statistical analysis and Markdown table generator for LEARNS v0.0015 ("The Partner Record").
-// Reads results.jsonl and prints every table in EXPERIMENT_REPORT.md:
-//   - Per-seed values (seeds 3, 7, 11, 13, 17 for 5-seed studies; 3, 7, 11 for 7,030-step full passes)
-//   - Means, tail min/max/mean/range (--tail 5)
-//   - Paired Δ with mean, sample standard deviation (s_Δ), and 95% Student-t confidence interval (df = n - 1)
-//   - Tier 1 Dual Verdict Rule: 95% CI of paired Δ excludes 0 AND |mean Δ| > max(meanTailRange_A, meanTailRange_B)
-//   - Marks any row containing reused records (carrying a reusedFrom field) with †
-// Usage:
-//   node tests/tables.js [results.jsonl] [--section=all|tier2|tier2_diag|tier2_traj|tier2_lr|tier3]
+/**
+ * Recomputes all LEARNS v0.0016 ("Rhythm") report tables from results.jsonl
+ * and loom-corpus-meta.json.
+ * Marks reused runs (carrying reusedFrom + original codeHash) with †.
+ */
 'use strict';
-
 const fs = require('fs');
 const path = require('path');
 
-const args = process.argv.slice(2);
-const fileArg = args.find(a => !a.startsWith('--')) || path.join(__dirname, '..', 'results.jsonl');
-const secArg = (args.find(a => a.startsWith('--section=')) || '--section=all').split('=')[1];
+const rootDir = path.join(__dirname, '..');
+const resultsPath = fs.existsSync(path.join(rootDir, 'results.jsonl'))
+  ? path.join(rootDir, 'results.jsonl')
+  : path.resolve('results.jsonl');
+const metaPath = path.join(rootDir, 'loom-corpus-meta.json');
 
-if (!fs.existsSync(fileArg)) {
-  console.error(`File not found: ${fileArg}`);
-  process.exit(1);
-}
-
-// Student-t critical values for two-sided 95% CI (alpha = 0.05)
-const T_CRIT_95 = {
-  1: 12.706204736432095,
-  2: 4.302652729911275,
-  3: 3.182446305284263,
-  4: 2.7764451051977987,
-  5: 2.5705818366147395,
-  6: 2.4469118511449692,
-  7: 2.3646242515927844,
-  8: 2.306004135204166,
-  9: 2.2621571628540993
-};
-
-const rawLines = fs.readFileSync(fileArg, 'utf8').trim().split('\n').filter(Boolean);
-const records = [];
-for (const line of rawLines) {
-  try {
-    records.push(JSON.parse(line));
-  } catch (e) {}
-}
-
-// Separate indices for fresh v0.0015 records (!r.reusedFrom) and reused prior-release records (r.reusedFrom)
-const byFreshKey = new Map();
-const byReusedKey = new Map();
-
-for (const r of records) {
-  const k = `${r.config}|${r.steps}|${r.stream || 'stride'}|${r.ngramData || ''}|${r.seed}`;
-  if (r.reusedFrom) {
-    byReusedKey.set(k, r);
-    byReusedKey.set(`${r.codeHash}|${k}`, r);
-  } else {
-    byFreshKey.set(k, r);
-  }
-}
-
-function getFreshRec(config, steps, stream, seed, ngramData = '') {
-  return byFreshKey.get(`${config}|${steps}|${stream}|${ngramData}|${seed}`) || null;
-}
-
-function getReusedRec(config, steps, stream, seed, codeHash = null, ngramData = '') {
-  const k = `${config}|${steps}|${stream}|${ngramData}|${seed}`;
-  if (codeHash) return byReusedKey.get(`${codeHash}|${k}`) || null;
-  return byReusedKey.get(k) || null;
-}
-
-function getFreshSeries(config, steps, stream, seeds, ngramData = '') {
-  return seeds.map(s => getFreshRec(config, steps, stream, s, ngramData));
-}
-
-function getReusedSeries(config, steps, stream, seeds, codeHash = null, ngramData = '') {
-  return seeds.map(s => getReusedRec(config, steps, stream, s, codeHash, ngramData));
-}
-
-function markLabelIfReused(label, recs, refRecs = null) {
-  const hasReused = (recs && recs.some(r => r && r.reusedFrom)) || (refRecs && refRecs.some(r => r && r.reusedFrom));
-  if (hasReused && !label.includes('†')) return `${label} †`;
-  return label;
-}
+const records = fs.readFileSync(resultsPath, 'utf8')
+  .split('\n')
+  .filter(l => l.trim())
+  .map(l => JSON.parse(l));
+const meta = fs.existsSync(metaPath) ? JSON.parse(fs.readFileSync(metaPath, 'utf8')) : null;
 
 function mean(arr) {
-  if (!arr.length) return NaN;
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
+  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : NaN;
 }
-
-function sampleSD(arr) {
+function sd(arr) {
   if (arr.length < 2) return 0;
   const m = mean(arr);
-  let s = 0;
-  for (const x of arr) s += (x - m) * (x - m);
-  return Math.sqrt(s / (arr.length - 1));
+  return Math.sqrt(arr.reduce((s, x) => s + (x - m) * (x - m), 0) / (arr.length - 1));
 }
-
+// Two-tailed t critical value for df=4 (95% CI): 2.776445
+function tCrit95(df) {
+  const table = { 1: 12.706, 2: 4.3027, 3: 3.1824, 4: 2.776445, 5: 2.5706 };
+  return table[df] || 1.96;
+}
+function pairedStats(candVals, baseVals, noiseFloor = 0.015) {
+  const n = Math.min(candVals.length, baseVals.length);
+  const diffs = [];
+  let wins = 0;
+  for (let i = 0; i < n; i++) {
+    const d = candVals[i] - baseVals[i];
+    diffs.push(d);
+    if (d < 0) wins++;
+  }
+  const m = mean(diffs);
+  const s = sd(diffs);
+  const se = n > 1 ? s / Math.sqrt(n) : 0;
+  const hw = n > 1 ? tCrit95(n - 1) * se : 0;
+  const ciLo = m - hw, ciHi = m + hw;
+  let verdict = 'inconclusive';
+  if (ciHi < 0 && Math.abs(m) > noiseFloor) verdict = 'WIN';
+  else if (ciLo > 0 && Math.abs(m) > noiseFloor) verdict = 'LOSS';
+  return { n, meanDiff: m, sdDiff: s, ciLo, ciHi, wins, verdict };
+}
 function fmt(x, d = 4) {
-  if (x === null || x === undefined || Number.isNaN(x)) return '—';
-  return Number(x).toFixed(d);
+  return (x === null || x === undefined || Number.isNaN(x)) ? '—' : Number(x).toFixed(d);
 }
-
 function fmtSigned(x, d = 4) {
   if (x === null || x === undefined || Number.isNaN(x)) return '—';
-  const v = Number(x);
-  return (v >= 0 ? '+' : '') + v.toFixed(d);
+  return (x >= 0 ? '+' : '') + Number(x).toFixed(d);
 }
 
-function hasMultiTail(recs) {
-  return recs && recs.every(r => r && Array.isArray(r.valTail) && r.valTail.length > 1);
-}
+const out = [];
 
-function computePairedStats(baseRecs, varRecs, field = 'testLoss') {
-  const diffs = [];
-  const baseTailRanges = [];
-  const varTailRanges = [];
-  const baseVals = [];
-  const varVals = [];
-
-  for (let i = 0; i < baseRecs.length; i++) {
-    const b = baseRecs[i], v = varRecs[i];
-    if (!b || !v) continue;
-    const bv = b[field], vv = v[field];
-    if (typeof bv === 'number' && typeof vv === 'number') {
-      diffs.push(vv - bv);
-      baseVals.push(bv);
-      varVals.push(vv);
-    }
-    if (typeof b.valTailRange === 'number' && Array.isArray(b.valTail) && b.valTail.length > 1) baseTailRanges.push(b.valTailRange);
-    if (typeof v.valTailRange === 'number' && Array.isArray(v.valTail) && v.valTail.length > 1) varTailRanges.push(v.valTailRange);
+// Table 1: Tier 1 .loom Corpus & Leak Check Summary
+if (meta) {
+  out.push('### Table 1: Tier 1 Procedural `.loom` Corpus & Crew Score Leak Check (`seed=20261111`)');
+  out.push('');
+  out.push('| Split / Crew Score | Author / Source | Channels / Scores | Total Bytes | `step` Bytes | `pitch` Bytes | `other` Bytes | Longest Common Substring vs Train | 16-Gram Unique Overlap |');
+  out.push('| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :--- | :---: |');
+  const cs = meta.corpusStats;
+  out.push(`| \`loom-train.txt\` | Synth Radio (110 ch) | 110 ch / ${cs.trainScores} scores | ${cs.trainRoleBytes.total} | ${cs.trainRoleBytes.step} | ${cs.trainRoleBytes.pitch} | ${cs.trainRoleBytes.other} | — | — |`);
+  out.push(`| \`loom-val.txt\` | Synth Radio (10 ch) | 10 ch / ${cs.valScores} scores | ${cs.valRoleBytes.total} | ${cs.valRoleBytes.step} | ${cs.valRoleBytes.pitch} | ${cs.valRoleBytes.other} | — | — |`);
+  out.push(`| \`loom-test-unseen\` | Synth Radio (26 ch) | 26 ch / ${cs.unseenScores} scores | ${cs.unseenRoleBytes.total} | ${cs.unseenRoleBytes.step} | ${cs.unseenRoleBytes.pitch} | ${cs.unseenRoleBytes.other} | — | — |`);
+  out.push(`| \`loom-test-crew\` (all 8) | Studio Crew | 8 scores | ${cs.crewRoleBytes.total} | ${cs.crewRoleBytes.step} | ${cs.crewRoleBytes.pitch} | ${cs.crewRoleBytes.other} | — | — |`);
+  for (const c of meta.crewScores) {
+    out.push(`| Crew: \`${c.id}\` | ${c.author} (${c.bars} bars, ${c.bpm} BPM) | 1 (${c.woven} woven) | ${c.bytes} | ${c.roleBytes.step} | ${c.roleBytes.pitch} | ${c.roleBytes.other} | ${c.leak.lcsLength} B (\`${c.leak.lcsString.slice(0, 28)}...\`) | ${(c.leak.uniqueOverlapFrac * 100).toFixed(2)}% (${c.leak.matchedUnique16Grams}/${c.leak.unique16Grams}) |`);
   }
-
-  const n = diffs.length;
-  if (n === 0) return null;
-  const dMean = mean(diffs);
-  const dSD = sampleSD(diffs);
-  const se = n > 1 ? dSD / Math.sqrt(n) : 0;
-  const tCrit = T_CRIT_95[n - 1] || 1.96;
-  const ciLo = dMean - tCrit * se;
-  const ciHi = dMean + tCrit * se;
-
-  const meanTailBase = baseTailRanges.length ? mean(baseTailRanges) : 0;
-  const meanTailVar = varTailRanges.length ? mean(varTailRanges) : 0;
-  const maxTailRange = Math.max(meanTailBase, meanTailVar);
-
-  const ciExcludesZero = (ciLo > 0) || (ciHi < 0);
-  const exceedsTail = Math.abs(dMean) > maxTailRange;
-
-  let verdict = 'Inconclusive';
-  if (ciExcludesZero && exceedsTail) {
-    verdict = dMean < 0 ? 'Improves' : 'Degrades';
-  }
-
-  return {
-    n,
-    baseMean: mean(baseVals),
-    varMean: mean(varVals),
-    dMean,
-    dSD,
-    ciLo,
-    ciHi,
-    meanTailBase,
-    meanTailVar,
-    maxTailRange,
-    ciExcludesZero,
-    exceedsTail,
-    verdict
-  };
+  out.push('');
 }
 
-function printTier2MainTable() {
-  const seeds = [3, 7, 11, 13, 17];
-  const b0Recs = getFreshSeries('L12:arch=learns;dim=32;lr=0.016', 1000, 'stride', seeds);
-  const v14DefRecs = getReusedSeries('L12:arch=learns;dim=32;lr=0.016', 1000, 'stride', seeds, '0x4048aacb');
-
-  const rows = [
-    {
-      label: '**B0**: `scoutScale=0;rbMode=causal` *(v0.0015 default)*',
-      role: 'Forward causal carry $R_B$, no reverse-LM loss',
-      recs: b0Recs,
-      isBase: true
-    },
-    {
-      label: '**A1**: `recordB=off` (`scoutScale=0`)',
-      role: 'Disable $R_B$ ($W_{\\text{rec},B}, W_{\\text{cross},A}, W_{\\text{cross},B}$ off)',
-      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;recordB=off', 1000, 'stride', seeds)
-    },
-    {
-      label: '**A2**: `rbMode=prevrev` (`scoutScale=0`)',
-      role: 'Seed $R_B$ at chunk start from reversed prev chunk',
-      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=prevrev', 1000, 'stride', seeds)
-    },
-    {
-      label: '**A3a**: `rbMode=lookback;lookback=16` (`scoutScale=0`)',
-      role: 'Rolling backward recurrence over $x_t \\dots x_{t-15}$',
-      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=16', 1000, 'stride', seeds)
-    },
-    {
-      label: '**A3b**: `rbMode=lookback;lookback=64` (`scoutScale=0`)',
-      role: 'Rolling backward recurrence over $x_t \\dots x_{t-63}$',
-      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=64', 1000, 'stride', seeds)
-    },
-    {
-      label: '**A4**: `scoutScale=0.5;scoutHead=separate`',
-      role: 'Reverse-LM scout on dedicated $W_{\\text{frontier,scout}}, W_{\\text{present,scout}}$',
-      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5;scoutHead=separate', 1000, 'stride', seeds)
-    },
-    {
-      label: 'v0.0014 default (`scoutScale=0.5;scoutHead=shared`)',
-      role: 'Reverse-LM scout sharing forward readout $W_{\\text{frontier}}, W_{\\text{present}}$',
-      recs: v14DefRecs
-    },
-    {
-      label: '**A4** vs v0.0014 default † *(paired readout isolation)*',
-      role: 'Effect of separating scout readout head at `scoutScale=0.5`',
-      recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5;scoutHead=separate', 1000, 'stride', seeds),
-      refRecs: v14DefRecs,
-      refNote: 'vs shared scout †'
-    },
-    {
-      label: 'GRU `ternary` (`dim=32, lr=0.016`)',
-      role: 'Parameter-matched 2-layer ternary GRU baseline',
-      recs: getReusedSeries('L12:arch=gru;dim=32;lr=0.016', 1000, 'stride', seeds, '0x4048aacb')
-    }
-  ];
-
-  console.log('### Table 1A: Tier 2 Partner Record Study — Held-Out Test Loss & Verdicts (1,000 Steps, `--stream=stride`, 5 Seeds `3, 7, 11, 13, 17`, `--tail 5 --final`)');
-  console.log('');
-  console.log('| Arm / Configuration | Partner Record Mechanism | Val Mean | Mean Tail Range | Test Mean | Test Seeds (`3 / 7 / 11 / 13 / 17`) | Paired $\\Delta\\text{Test}$ Mean $\\pm s_\\Delta$ | 95% Student-$t$ CI ($df=4$) | Max Tail Range | Tier 1 Verdict |');
-  console.log('|---|---|---:|---:|---:|---|---:|---|---:|---|');
-
-  for (const r of rows) {
-    const recs = r.recs;
-    if (!recs || recs.some(x => !x)) continue;
-    const lbl = markLabelIfReused(r.label, recs, r.refRecs);
-    const valMean = fmt(mean(recs.map(x => x.valLoss)));
-    const tailRange = fmt(mean(recs.map(x => x.valTailRange)));
-    const testMean = fmt(mean(recs.map(x => x.testLoss)));
-    const testSeeds = recs.map(x => fmt(x.testLoss)).join(' / ');
-    if (r.isBase) {
-      console.log(`| ${lbl} | ${r.role} | ${valMean} | ${tailRange} | **${testMean}** | ${testSeeds} | — *(baseline B0)* | — | ${tailRange} | **Baseline** |`);
-    } else {
-      const ref = r.refRecs || b0Recs;
-      const st = computePairedStats(ref, recs, 'testLoss');
-      const ciStr = `[${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}]`;
-      const note = r.refNote ? ` *(${r.refNote})*` : '';
-      console.log(`| ${lbl} | ${r.role} | ${valMean} | ${tailRange} | ${testMean} | ${testSeeds} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)}${note} | \`${ciStr}\` | ${fmt(st.maxTailRange)} | **${st.verdict}** |`);
+// Table 2: Tier 2 Seed-3 Validation LR Sweep on .loom
+out.push('### Table 2: Tier 2 Validation Learning-Rate Sweep on `.loom` (`seed=3`, 1,000 Steps)');
+out.push('');
+out.push('| Model | Weights | Params | `lr=0.004` Val | `lr=0.008` Val | `lr=0.016` Val | `lr=0.024` Val | Selected LR |');
+out.push('| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |');
+const sweepSpecs = [
+  { label: 'GRU', arch: 'gru', weights: 'float32', lrs: [0.008, 0.016, 0.024] },
+  { label: 'GRU', arch: 'gru', weights: 'ternary', lrs: [0.008, 0.016, 0.024] },
+  { label: 'LEARNS (B0)', arch: 'learns', weights: 'float32', lrs: [0.004, 0.008, 0.016] },
+  { label: 'LEARNS (B0)', arch: 'learns', weights: 'ternary', lrs: [0.008, 0.016, 0.024] },
+  { label: 'Transformer', arch: 'transformer', weights: 'float32', lrs: [0.004, 0.008, 0.016] },
+  { label: 'Transformer', arch: 'transformer', weights: 'ternary', lrs: [0.004, 0.008, 0.016] }
+];
+for (const sp of sweepSpecs) {
+  const vals = {};
+  let pCount = '—';
+  let bestLR = null, bestV = Infinity;
+  for (const lr of [0.004, 0.008, 0.016, 0.024]) {
+    const rec = records.find(r =>
+      r.task === 'loom' && r.arch === sp.arch && r.seed === 3 && r.steps === 1000 &&
+      (sp.weights === 'float32' ? r.config.includes('weights=float32') : !r.config.includes('weights=float32')) &&
+      (lr === 0.004 ? (!r.config.includes('lr=') || r.config.includes('lr=0.004')) : r.config.includes(`lr=${lr}`)) &&
+      !r.config.includes('helix=') && !r.config.includes('recordB=off') && !r.config.includes('frontierPresent=off')
+    );
+    if (rec) {
+      vals[lr] = rec.valLoss;
+      pCount = rec.paramCount;
+      if (rec.valLoss < bestV) { bestV = rec.valLoss; bestLR = lr; }
     }
   }
-  console.log('');
-  console.log('*Note: Rows marked with `†` reuse bit-identical runs from `results.jsonl` with their original `codeHash` (`0x4048aacb` for v0.0014) and `reusedFrom` provenance field preserved.*');
-  console.log('');
+  out.push(`| ${sp.label} | ${sp.weights} | ${pCount} | ${fmt(vals[0.004])} | ${fmt(vals[0.008])} | ${fmt(vals[0.016])} | ${fmt(vals[0.024])} | \`${bestLR}\` |`);
 }
+out.push('');
 
-function printTier2DiagTable() {
-  const seeds = [3, 7, 11, 13, 17];
-  const b0Recs = getFreshSeries('L12:arch=learns;dim=32;lr=0.016', 1000, 'stride', seeds);
-  const v14DefRecs = getReusedSeries('L12:arch=learns;dim=32;lr=0.016', 1000, 'stride', seeds, '0x4048aacb');
-  const v14Seed3Fresh = getFreshRec('L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5', 1000, 'stride', 3);
+// Table 3: Tier 2 Main 5-Seed .loom Benchmark (Validation, Unseen Genres, Crew Scores + Paired Verdicts vs LEARNS B0 Ternary)
+out.push('### Table 3: Tier 2 `.loom` Benchmark — 5-Seed Overall & Byte-Role Losses (`seeds=3,7,11,13,17`, 1,000 Steps)');
+out.push('');
+out.push('| Model / Baseline | Params | Val Mean±SD | Val Tail Range | Unseen Genres Mean±SD | Unseen `step` / `pitch` / `other` | Crew Scores Mean±SD | Crew `step` / `pitch` / `other` | Unseen Δ vs B0 Ternary (95% CI, Verdict) |');
+out.push('| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |');
 
-  const rows = [
-    { label: '**B0**: `scoutScale=0;rbMode=causal` *(default)*', recs: b0Recs, isBase: true },
-    { label: '**A1**: `recordB=off` (`scoutScale=0`)', recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;recordB=off', 1000, 'stride', seeds) },
-    { label: '**A2**: `rbMode=prevrev` (`scoutScale=0`)', recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=prevrev', 1000, 'stride', seeds) },
-    { label: '**A3a**: `rbMode=lookback;lookback=16` (`scoutScale=0`)', recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=16', 1000, 'stride', seeds) },
-    { label: '**A3b**: `rbMode=lookback;lookback=64` (`scoutScale=0`)', recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=64', 1000, 'stride', seeds) },
-    { label: '**A4**: `scoutScale=0.5;scoutHead=separate`', recs: getFreshSeries('L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5;scoutHead=separate', 1000, 'stride', seeds) },
-    { label: 'v0.0014 default (`scoutScale=0.5;scoutHead=shared`)', recs: v14DefRecs, diagFallback: v14Seed3Fresh }
-  ];
+const seeds = [3, 7, 11, 13, 17];
+function getLoom5(tag) {
+  return seeds.map(s => records.find(r => r.tag === tag && r.seed === s)).filter(Boolean);
+}
+const b0TernaryRuns = getLoom5('v16_t2_learns_ternary');
+const b0Unseen = b0TernaryRuns.map(r => r.unseenTestLoss);
 
-  console.log('### Table 1B: Tier 2 Partner Record Study — Validation Verdicts, Training Speed (`tokensPerSec`), and End-of-Training $\\mathbf{R}_B$ Diagnostics (1,000 Steps, 5 Seeds `3, 7, 11, 13, 17`)');
-  console.log('');
-  console.log('| Arm / Configuration | Params | Val Mean | Val Tail Mean | Mean Tail Range | Paired $\\Delta\\text{Val}$ Mean $\\pm s_\\Delta$ | 95% Student-$t$ CI ($df=4$) | Tier 1 Verdict (Val) | Mean `tokensPerSec` | End $\\|\\mathbf{R}_A\\|_2$ | End $\\|\\mathbf{R}_B\\|_2$ | End $\\cos(\\mathbf{R}_A, \\mathbf{R}_B)$ |');
-  console.log('|---|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|');
+const t2Groups = [
+  { label: 'GRU (float32, `lr=0.016`)', tag: 'v16_t2_gru_float32' },
+  { label: 'GRU (ternary, `lr=0.016`)', tag: 'v16_t2_gru_ternary' },
+  { label: 'LEARNS B0 (float32, `lr=0.008`)', tag: 'v16_t2_learns_float32' },
+  { label: 'LEARNS B0 (ternary, `lr=0.016`)', tag: 'v16_t2_learns_ternary', isBase: true },
+  { label: 'Transformer (float32, `lr=0.004`)', tag: 'v16_t2_transformer_float32' },
+  { label: 'Transformer (ternary, `lr=0.008`)', tag: 'v16_t2_transformer_ternary' }
+];
 
-  for (const r of rows) {
-    const recs = r.recs;
-    if (!recs || recs.some(x => !x)) continue;
-    const lbl = markLabelIfReused(r.label, recs);
-    const params = recs[0].paramCount.toLocaleString('en-US');
-    const valMean = fmt(mean(recs.map(x => x.valLoss)));
-    const tailMean = fmt(mean(recs.map(x => x.valTailMean)));
-    const tailRange = fmt(mean(recs.map(x => x.valTailRange)));
-    const tps = Math.round(mean(recs.map(x => x.tokensPerSec))).toLocaleString('en-US');
-
-    let rANormStr, rBNormStr, cosStr;
-    if (recs.every(x => typeof x.rBNorm === 'number')) {
-      rANormStr = fmt(mean(recs.map(x => x.rANorm)), 4);
-      rBNormStr = fmt(mean(recs.map(x => x.rBNorm)), 4);
-      cosStr = fmtSigned(mean(recs.map(x => x.rArBCos)), 4);
-    } else if (r.diagFallback) {
-      rANormStr = `${fmt(r.diagFallback.rANorm, 4)} *(s3)*`;
-      rBNormStr = `${fmt(r.diagFallback.rBNorm, 4)} *(s3)*`;
-      cosStr = `${fmtSigned(r.diagFallback.rArBCos, 4)} *(s3)*`;
-    } else {
-      rANormStr = '—'; rBNormStr = '—'; cosStr = '—';
-    }
-
-    if (r.isBase) {
-      console.log(`| ${lbl} | ${params} | **${valMean}** | ${tailMean} | ${tailRange} | — *(baseline B0)* | — | **Baseline** | ${tps} | ${rANormStr} | ${rBNormStr} | ${cosStr} |`);
-    } else {
-      const st = computePairedStats(b0Recs, recs, 'valLoss');
-      const ciStr = `[${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}]`;
-      console.log(`| ${lbl} | ${params} | ${valMean} | ${tailMean} | ${tailRange} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)} | \`${ciStr}\` | **${st.verdict}** | ${tps} | ${rANormStr} | ${rBNormStr} | ${cosStr} |`);
-    }
+for (const g of t2Groups) {
+  const rs = getLoom5(g.tag);
+  if (!rs.length) continue;
+  const valArr = rs.map(r => r.valLoss);
+  const trArr = rs.map(r => r.valTailRange);
+  const unArr = rs.map(r => r.unseenTestLoss);
+  const crArr = rs.map(r => r.crewTestLoss);
+  const uStep = mean(rs.map(r => r.unseenRoleLoss.step));
+  const uPitch = mean(rs.map(r => r.unseenRoleLoss.pitch));
+  const uOther = mean(rs.map(r => r.unseenRoleLoss.other));
+  const cStep = mean(rs.map(r => r.crewRoleLoss.step));
+  const cPitch = mean(rs.map(r => r.crewRoleLoss.pitch));
+  const cOther = mean(rs.map(r => r.crewRoleLoss.other));
+  let cmpStr = '— (baseline)';
+  if (!g.isBase && rs.length === 5 && b0Unseen.length === 5) {
+    const st = pairedStats(unArr, b0Unseen, 0.010);
+    cmpStr = `${fmtSigned(st.meanDiff)} ([${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}], ${st.wins}/5, **${st.verdict}**)`;
   }
-  console.log('');
+  out.push(`| ${g.label} | ${rs[0].paramCount} | ${fmt(mean(valArr))}±${fmt(sd(valArr))} | ${fmt(mean(trArr))} | ${fmt(mean(unArr))}±${fmt(sd(unArr))} | ${fmt(uStep)} / ${fmt(uPitch)} / ${fmt(uOther)} | ${fmt(mean(crArr))}±${fmt(sd(crArr))} | ${fmt(cStep)} / ${fmt(cPitch)} / ${fmt(cOther)} | ${cmpStr} |`);
 }
 
-function printTier2TrajectoryTable() {
-  const seeds = [3, 7, 11, 13, 17];
-  const arms = [
-    { label: '**B0**: `scoutScale=0;rbMode=causal`', cfg: 'L12:arch=learns;dim=32;lr=0.016' },
-    { label: '**A1**: `recordB=off`', cfg: 'L12:arch=learns;dim=32;lr=0.016;recordB=off' },
-    { label: '**A2**: `rbMode=prevrev`', cfg: 'L12:arch=learns;dim=32;lr=0.016;rbMode=prevrev' },
-    { label: '**A3a**: `rbMode=lookback;lookback=16`', cfg: 'L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=16' },
-    { label: '**A3b**: `rbMode=lookback;lookback=64`', cfg: 'L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=64' },
-    { label: '**A4**: `scoutScale=0.5;scoutHead=separate`', cfg: 'L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5;scoutHead=separate' },
-    { label: 'v0.0014 default (`scoutScale=0.5;scoutHead=shared`, seed 3 repro)', cfg: 'L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5', seedsOverride: [3] }
-  ];
+// Add N-gram rows to Table 3
+for (const ng of ['5gram', 'trigram', 'bigram', 'unigram']) {
+  for (const mode of ['seen', 'all']) {
+    const r = records.find(x => x.task === 'loom' && x.arch === ng && x.ngramData === mode);
+    if (!r) continue;
+    const uR = r.unseenRoleLoss || {};
+    const cR = r.crewRoleLoss || {};
+    out.push(`| ${ng} (\`ngramData=${mode}\`) | ${r.paramCount} | ${fmt(r.valLoss)} | 0.0000 | ${fmt(r.unseenTestLoss)} | ${fmt(uR.step)} / ${fmt(uR.pitch)} / ${fmt(uR.other)} | ${fmt(r.crewTestLoss)} | ${fmt(cR.step)} / ${fmt(cR.pitch)} / ${fmt(cR.other)} | — |`);
+  }
+}
+out.push('');
 
-  const stepsList = [1, 250, 500, 750, 1000];
-  console.log('### Table 1C: Partner Record $\\mathbf{R}_B$ Norm $\\|\\mathbf{R}_B\\|_2$ and Cosine $\\cos(\\mathbf{R}_A, \\mathbf{R}_B)$ Trajectory Over Training Time (5-Seed Means across Steps `1 .. 1000` and Final Validation)');
-  console.log('');
-  console.log('| Arm / Configuration | Step 1 $\\|\\mathbf{R}_B\\| / \\cos$ | Step 250 $\\|\\mathbf{R}_B\\| / \\cos$ | Step 500 $\\|\\mathbf{R}_B\\| / \\cos$ | Step 750 $\\|\\mathbf{R}_B\\| / \\cos$ | Step 1000 $\\|\\mathbf{R}_B\\| / \\cos$ | Final Val $\\|\\mathbf{R}_B\\| / \\cos$ |');
-  console.log('|---|---|---|---|---|---|---|');
+// Table 4: Per-Crew-Score Breakdown (8 Crew Scores, 5-Seed Mean Loss)
+out.push('### Table 4: Tier 2 Per-Score Loss on the 8 Comment-Stripped Crew Scores (5-Seed Mean Nats/Byte)');
+out.push('');
+const crewIds = ['peepers', 'hollow', 'hollow-2', 'threshold', 'understory', 'understory-morning', 'understory-rest', 'understory-trouble'];
+out.push('| Model | ' + crewIds.map(id => `\`${id}\``).join(' | ') + ' | Unweighted 8-Score Mean | Byte-Weighted Crew Loss |');
+out.push('| :--- | ' + crewIds.map(() => ':---:').join(' | ') + ' | :---: | :---: |');
+for (const g of t2Groups) {
+  const rs = getLoom5(g.tag);
+  if (!rs.length) continue;
+  const cells = crewIds.map(id => fmt(mean(rs.map(r => r.crewByScore[id].loss))));
+  out.push(`| ${g.label} | ${cells.join(' | ')} | ${fmt(mean(rs.map(r => r.crewScoreMeanLoss)))} | ${fmt(mean(rs.map(r => r.crewTestLoss)))} |`);
+}
+out.push('');
 
-  for (const a of arms) {
-    const sList = a.seedsOverride || seeds;
-    const recs = getFreshSeries(a.cfg, 1000, 'stride', sList);
-    if (recs.some(x => !x || !x.rBDiagCurve)) continue;
-    const stepCells = stepsList.map(st => {
-      const pts = recs.map(r => r.rBDiagCurve.find(p => p.step === st)).filter(Boolean);
-      const nMean = mean(pts.map(p => p.rBNorm));
-      const cMean = mean(pts.map(p => p.rArBCos));
-      return `${fmt(nMean, 2)} / ${fmtSigned(cMean, 3)}`;
+// Table 5: Per-Channel Breakdown across the 26 Held-Out Unseen Genre Channels (5-Seed Mean Loss)
+out.push('### Table 5: Tier 2 Per-Channel Loss across the 26 Held-Out Unseen-Genre Channels (5-Seed Mean Nats/Byte)');
+out.push('');
+out.push('| Held-Out Channel (`id`) | Cluster | Bytes | GRU (float32) | GRU (ternary) | LEARNS B0 (float32) | LEARNS B0 (ternary) | Transformer (float32) | Transformer (ternary) |');
+out.push('| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |');
+if (b0TernaryRuns.length > 0 && b0TernaryRuns[0].unseenByChannel) {
+  const chKeys = Object.keys(b0TernaryRuns[0].unseenByChannel);
+  for (const chId of chKeys) {
+    const chMeta = meta && meta.unseenTestChannels ? meta.unseenTestChannels.find(c => c.id === chId) : null;
+    const clName = chMeta ? chMeta.cluster : '—';
+    const bCount = b0TernaryRuns[0].unseenByChannel[chId].bytes;
+    const vals = t2Groups.map(g => {
+      const rs = getLoom5(g.tag);
+      return fmt(mean(rs.map(r => r.unseenByChannel[chId].loss)));
     });
-    const valN = mean(recs.map(r => r.rBNorm));
-    const valC = mean(recs.map(r => r.rArBCos));
-    console.log(`| ${a.label} | ${stepCells.join(' | ')} | **${fmt(valN, 2)} / ${fmtSigned(valC, 3)}** |`);
+    out.push(`| \`${chId}\` | ${clName} | ${bCount} | ${vals.join(' | ')} |`);
   }
-  console.log('');
+}
+out.push('');
+
+// Table 6: Tier 3 Component & Helix Ablations on .loom
+out.push('### Table 6: Tier 3 `.loom` Component & Helix Ablations vs LEARNS B0 Ternary (`lr=0.016`, 1,000 Steps)');
+out.push('');
+out.push('| Configuration | Seeds | Val Loss | Unseen Genres Loss | Unseen `step` / `pitch` / `other` | Crew Loss | Crew `step` / `pitch` / `other` | Unseen Δ vs B0 (Paired across matched seeds) |');
+out.push('| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |');
+const t3Groups = [
+  { label: 'B0: `learns` default (`helix=on`)', tag: 'v16_t2_learns_ternary', isBase: true },
+  { label: 'Ablation: `helix=off`', tag: 'v16_t3_helix_off' },
+  { label: 'Ablation: `helixRotation=none`', tag: 'v16_t3_helixRot_none' },
+  { label: 'Ablation: `helixRetention=fixed`', tag: 'v16_t3_helixRet_fixed' },
+  { label: 'Ablation: `helixRetention=none`', tag: 'v16_t3_helixRet_none' },
+  { label: 'Ablation: `frontierPresent=off`', tag: 'v16_t3_frontierPresent_off' },
+  { label: 'Ablation: `recordB=off`', tag: 'v16_t3_recordB_off' }
+];
+for (const g of t3Groups) {
+  const rs = records.filter(r => r.tag === g.tag && r.testLoss !== null).sort((a, b) => a.seed - b.seed);
+  if (!rs.length) continue;
+  const matchedBase = rs.map(r => b0TernaryRuns.find(b => b.seed === r.seed)).filter(Boolean);
+  const uStep = mean(rs.map(r => r.unseenRoleLoss.step));
+  const uPitch = mean(rs.map(r => r.unseenRoleLoss.pitch));
+  const uOther = mean(rs.map(r => r.unseenRoleLoss.other));
+  const cStep = mean(rs.map(r => r.crewRoleLoss.step));
+  const cPitch = mean(rs.map(r => r.crewRoleLoss.pitch));
+  const cOther = mean(rs.map(r => r.crewRoleLoss.other));
+  let deltaStr = '— (baseline)';
+  if (!g.isBase && matchedBase.length === rs.length) {
+    const diffs = rs.map((r, i) => r.unseenTestLoss - matchedBase[i].unseenTestLoss);
+    const stepDiffs = rs.map((r, i) => r.unseenRoleLoss.step - matchedBase[i].unseenRoleLoss.step);
+    const pitchDiffs = rs.map((r, i) => r.unseenRoleLoss.pitch - matchedBase[i].unseenRoleLoss.pitch);
+    deltaStr = `${fmtSigned(mean(diffs))} (step ${fmtSigned(mean(stepDiffs))}, pitch ${fmtSigned(mean(pitchDiffs))})`;
+  }
+  out.push(`| ${g.label} | ${rs.length} | ${fmt(mean(rs.map(r => r.valLoss)))} | ${fmt(mean(rs.map(r => r.unseenTestLoss)))} | ${fmt(uStep)} / ${fmt(uPitch)} / ${fmt(uOther)} | ${fmt(mean(rs.map(r => r.crewTestLoss)))} | ${fmt(cStep)} / ${fmt(cPitch)} / ${fmt(cOther)} | ${deltaStr} |`);
+}
+out.push('');
+
+// Table 7: Tier 4 Look-Back Walk-Order Control on Sherlock Prose (corpus.txt, 5 seeds)
+out.push('### Table 7: Tier 4 Look-Back Walk-Order Control on Sherlock Prose (`corpus.txt`, 5 Seeds `3,7,11,13,17`, 1,000 Steps)');
+out.push('');
+out.push('| Prose Arm (`corpus.txt`) | Walk Order over $x_{t-N+1}\\dots x_t$ | Val Mean±SD | Test Mean±SD | Δ Test vs B0 (95% CI, Wins, Verdict) | Δ Test vs `lookback` Same $N$ (95% CI, Verdict) |');
+out.push('| :--- | :--- | :---: | :---: | :--- | :--- |');
+
+function getProse5(tagOrCfg) {
+  return seeds.map(s => {
+    const fresh = records.find(r => (!r.task || r.task === 'prose') && r.tag === tagOrCfg.tag && r.seed === s && r.testLoss !== null);
+    if (fresh) return fresh;
+    return records.find(r => (!r.task || r.task === 'prose') && r.tag === tagOrCfg.fallbackTag && r.seed === s && r.testLoss !== null);
+  }).filter(Boolean);
 }
 
-function printTier2LRSweepTable() {
-  console.log('### Table 1D: Validation Learning-Rate Verification for Partner-Record Modes (`seed=3`, 1,000 Steps, `--stream=stride`, `--tail 5`, Validation Only)');
-  console.log('');
-  console.log('| Partner-Record Mode | Candidate `lr` | Config String | Val Final | Val Tail Min | Val Tail Max | Val Tail Mean | Val Tail Range | Selected on Val? |');
-  console.log('|---|---:|---|---:|---:|---:|---:|---:|---|');
+const pB0 = getProse5({ tag: 'v16_t4_repro_B0', fallbackTag: 'v15_B0_default' });
+const pLB16 = getProse5({ tag: 'v16_t4_repro_lookback16', fallbackTag: 'v15_A3_lookback16' });
+const pW16 = getProse5({ tag: 'v16_t4_window16', fallbackTag: 'v16_t4_window16' });
+const pLB64 = getProse5({ tag: 'v16_t4_repro_lookback64', fallbackTag: 'v15_A3_lookback64' });
+const pW64 = getProse5({ tag: 'v16_t4_window64', fallbackTag: 'v16_t4_window64' });
 
-  const groups = [
-    {
-      name: '**B0**: `scoutScale=0;rbMode=causal`',
-      items: [
-        { lr: '0.008', rec: getReusedRec('L12:arch=learns;dim=32;lr=0.008;scoutScale=0', 1000, 'stride', 3, '0x4048aacb') },
-        { lr: '0.016', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.016', 1000, 'stride', 3) },
-        { lr: '0.024', rec: getReusedRec('L12:arch=learns;dim=32;lr=0.024;scoutScale=0', 1000, 'stride', 3, '0x4048aacb') }
-      ]
-    },
-    {
-      name: '**A3a**: `rbMode=lookback;lookback=16`',
-      items: [
-        { lr: '0.008', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.008;rbMode=lookback;lookback=16', 1000, 'stride', 3) },
-        { lr: '0.016', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=16', 1000, 'stride', 3) },
-        { lr: '0.024', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.024;rbMode=lookback;lookback=16', 1000, 'stride', 3) }
-      ]
-    },
-    {
-      name: '**A3b**: `rbMode=lookback;lookback=64`',
-      items: [
-        { lr: '0.008', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.008;rbMode=lookback;lookback=64', 1000, 'stride', 3) },
-        { lr: '0.016', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.016;rbMode=lookback;lookback=64', 1000, 'stride', 3) },
-        { lr: '0.024', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.024;rbMode=lookback;lookback=64', 1000, 'stride', 3) }
-      ]
-    },
-    {
-      name: '**A4**: `scoutScale=0.5;scoutHead=separate`',
-      items: [
-        { lr: '0.008', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.008;scoutScale=0.5;scoutHead=separate', 1000, 'stride', 3) },
-        { lr: '0.016', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.016;scoutScale=0.5;scoutHead=separate', 1000, 'stride', 3) },
-        { lr: '0.024', rec: getFreshRec('L12:arch=learns;dim=32;lr=0.024;scoutScale=0.5;scoutHead=separate', 1000, 'stride', 3) }
-      ]
-    }
-  ];
+const t4Rows = [
+  { label: 'B0: `rbMode=causal` (`scoutScale=0`) †', walk: 'Causal carry ($\\mathbf{R}_{B,t}$ from $\\mathbf{R}_{B,t-1}$ + $\\mathbf{K}_{B,t}$)', runs: pB0, isBase: true },
+  { label: 'A3-16: `rbMode=lookback;lookback=16` †', walk: 'Backward ($x_t \\to x_{t-15}$, oldest last)', runs: pLB16 },
+  { label: 'T4-W16: `rbMode=window;lookback=16`', walk: 'Forward ($x_{t-15} \\to x_t$, newest last)', runs: pW16, sameN: pLB16 },
+  { label: 'A3-64: `rbMode=lookback;lookback=64` †', walk: 'Backward ($x_t \\to x_{t-63}$, oldest last)', runs: pLB64 },
+  { label: 'T4-W64: `rbMode=window;lookback=64`', walk: 'Forward ($x_{t-63} \\to x_t$, newest last)', runs: pW64, sameN: pLB64 }
+];
 
-  for (const g of groups) {
-    let bestLR = null, bestVal = Infinity;
-    for (const it of g.items) {
-      if (it.rec && it.rec.valLoss < bestVal) { bestVal = it.rec.valLoss; bestLR = it.lr; }
-    }
-    for (const it of g.items) {
-      const r = it.rec;
-      if (!r) continue;
-      const win = it.lr === bestLR;
-      const rowName = r.reusedFrom ? `${g.name} †` : g.name;
-      const cfgDagger = r.reusedFrom ? ' †' : '';
-      console.log(`| ${rowName} | \`${it.lr}\` | \`${r.config}\`${cfgDagger} | ${win ? '**' + fmt(r.valLoss) + '**' : fmt(r.valLoss)} | ${fmt(r.valTailMin)} | ${fmt(r.valTailMax)} | ${fmt(r.valTailMean)} | ${fmt(r.valTailRange)} | ${win ? '**Yes (Winner)**' : 'No'} |`);
-    }
+const pB0Test = pB0.map(r => r.testLoss);
+for (const row of t4Rows) {
+  const rs = row.runs;
+  if (rs.length < 5) continue;
+  const vArr = rs.map(r => r.valLoss);
+  const tArr = rs.map(r => r.testLoss);
+  let vsB0 = '— (baseline)';
+  if (!row.isBase) {
+    const st = pairedStats(tArr, pB0Test, 0.015);
+    vsB0 = `${fmtSigned(st.meanDiff)} ([${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}], ${st.wins}/5, **${st.verdict}**)`;
   }
-  console.log('');
+  let vsLB = '—';
+  if (row.sameN && row.sameN.length === 5) {
+    const stLB = pairedStats(tArr, row.sameN.map(r => r.testLoss), 0.015);
+    vsLB = `${fmtSigned(stLB.meanDiff)} ([${fmtSigned(stLB.ciLo)}, ${fmtSigned(stLB.ciHi)}], ${stLB.wins}/5, **${stLB.verdict}**)`;
+  }
+  out.push(`| ${row.label} | ${row.walk} | ${fmt(mean(vArr))}±${fmt(sd(vArr))} | ${fmt(mean(tArr))}±${fmt(sd(tArr))} | ${vsB0} | ${vsLB} |`);
 }
+out.push('');
+out.push('*(† Rows marked with † reuse seeds 7, 11, 13, 17 from v0.0015 (`codeHash=0x626fd26c`, `reusedFrom="v0.0015"`) after verifying seed 3 is bit-for-bit identical under v0.0016 `codeHash=0x9c28cae9`.)*');
 
-function printTier3Tables() {
-  const seeds = [3, 7, 11];
-  const b0FullRecs = getFreshSeries('L12:arch=learns;dim=32;lr=0.016', 7030, 'stride', seeds);
-  const gruFullFreshRecs = getFreshSeries('L12:arch=gru;dim=32;lr=0.016', 7030, 'stride', seeds);
-
-  const arms = [
-    {
-      label: 'LEARNS v0.0015 default (**B0**: `scoutScale=0, rbMode=causal`)',
-      code: '`0x626fd26c` *(fresh v0.0015)*',
-      recs: b0FullRecs,
-      isBase: true
-    },
-    {
-      label: 'GRU `ternary` (`dim=32, lr=0.016`)',
-      code: '`0x626fd26c` *(fresh v0.0015)*',
-      recs: gruFullFreshRecs
-    },
-    {
-      label: 'LEARNS v0.0014 default (`scoutScale=0.5, rescale, inject`)',
-      code: '`0x4048aacb` *(v0.0014)*',
-      recs: getReusedSeries('L12:arch=learns;dim=32;lr=0.016', 7030, 'stride', seeds, '0x4048aacb')
-    },
-    {
-      label: 'LEARNS `weights=float32;scoutScale=0` (`lr=0.016`)',
-      code: '`0x4048aacb` *(v0.0014)*',
-      recs: getReusedSeries('L12:arch=learns;dim=32;lr=0.016;weights=float32;scoutScale=0', 7030, 'stride', seeds, '0x4048aacb')
-    },
-    {
-      label: 'LEARNS `weights=float32;scoutScale=0.5` (`lr=0.016`)',
-      code: '`0x4048aacb` *(v0.0014)*',
-      recs: getReusedSeries('L12:arch=learns;dim=32;lr=0.016;weights=float32', 7030, 'stride', seeds, '0x4048aacb')
-    },
-    {
-      label: 'LEARNS v0.0013 legacy (`layernorm, no-inject, scoutScale=0.5`)',
-      code: '`0xdf8ae499` *(v0.0013)*',
-      recs: getReusedSeries('L12:arch=learns;dim=32;lr=0.016;fpInject=off;fpNorm=layernorm', 7030, 'stride', seeds, '0xdf8ae499')
-    },
-    {
-      label: 'Transformer `ternary` (`dim=32, lr=0.016`)',
-      code: '`0xdf8ae499` *(v0.0013)*',
-      recs: getReusedSeries('L12:arch=transformer;dim=32;lr=0.016', 7030, 'stride', seeds, '0xdf8ae499')
-    },
-    {
-      label: 'Transformer `float32` (`dim=32, lr=0.008`)',
-      code: '`0xdf8ae499` *(v0.0013)*',
-      recs: getReusedSeries('L12:arch=transformer;dim=32;lr=0.008;weights=float32', 7030, 'stride', seeds, '0xdf8ae499')
-    },
-    {
-      label: 'GRU `float32` (`dim=32, lr=0.016`)',
-      code: '`0x4048aacb` *(v0.0014)*',
-      recs: getReusedSeries('L12:arch=gru;dim=32;lr=0.016;weights=float32', 7030, 'stride', seeds, '0x4048aacb')
-    },
-    {
-      label: 'GRU `float32` (`dim=32, lr=0.008`)',
-      code: '`0xdf8ae499` *(v0.0013)*',
-      recs: getReusedSeries('L12:arch=gru;dim=32;lr=0.008;weights=float32', 7030, 'stride', seeds, '0xdf8ae499')
-    }
-  ];
-
-  console.log('### Table 2A: Tier 3 Full-Book Training Pass (`7,030` Steps = 1.0 Epoch, `--stream=stride`, 3 Seeds `3, 7, 11`, `--tail 5 --final`)');
-  console.log('');
-  console.log('| Architecture / Configuration | `codeHash` | Val Mean | Mean Tail Range | Test Mean | Test Seeds (`3 / 7 / 11`) | Paired $\\Delta\\text{Test}$ vs B0 | 95% Student-$t$ CI ($df=2$) | Max Tail Range | Tier 1 Verdict |');
-  console.log('|---|---|---:|---:|---:|---|---:|---|---:|---|');
-
-  for (const a of arms) {
-    const recs = a.recs;
-    if (!recs || recs.some(x => !x)) continue;
-    const lbl = markLabelIfReused(a.label, recs);
-    const valMean = fmt(mean(recs.map(x => x.valLoss)));
-    const tailRange = hasMultiTail(recs) ? fmt(mean(recs.map(x => x.valTailRange))) : '—';
-    const testMean = fmt(mean(recs.map(x => x.testLoss)));
-    const testSeeds = recs.map(x => fmt(x.testLoss)).join(' / ');
-    if (a.isBase) {
-      console.log(`| ${lbl} | ${a.code} | ${valMean} | ${tailRange} | **${testMean}** | ${testSeeds} | — *(baseline B0)* | — | ${tailRange} | **Baseline** |`);
-    } else {
-      const st = computePairedStats(b0FullRecs, recs, 'testLoss');
-      const ciStr = `[${fmtSigned(st.ciLo)}, ${fmtSigned(st.ciHi)}]`;
-      console.log(`| ${lbl} | ${a.code} | ${valMean} | ${tailRange} | ${testMean} | ${testSeeds} | ${fmtSigned(st.dMean)} $\\pm$ ${fmt(st.dSD)} | \`${ciStr}\` | ${fmt(st.maxTailRange)} | **${st.verdict}** |`);
-    }
-  }
-  console.log('');
-  console.log('*Note: The first two rows (`LEARNS v0.0015 default B0` and `GRU ternary`) are fresh v0.0015 runs (`codeHash: 0x626fd26c`) with full 5-checkpoint tail bands (`--tail 5 --final`). Context rows marked with `†` reuse prior-release runs with their original `codeHash` (`0x4048aacb` or `0xdf8ae499`) and `reusedFrom` field preserved.*');
-  console.log('');
-
-  const checkpoints = [1000, 2000, 3000, 4000, 5000, 6000, 7030];
-  console.log('### Table 2B: Full-Pass Validation Learning Curves (3-Seed Mean Validation Loss in nats/byte across Checkpoints `1,000 .. 7,030`)');
-  console.log('');
-  console.log('| Architecture / Configuration | `codeHash` | Step 1,000 | Step 2,000 | Step 3,000 | Step 4,000 | Step 5,000 | Step 6,000 | Step 7,030 (Final) |');
-  console.log('|---|---|---:|---:|---:|---:|---:|---:|---:|');
-
-  for (const a of arms) {
-    const recs = a.recs;
-    if (!recs || recs.some(x => !x || !x.valCurve)) continue;
-    const lbl = markLabelIfReused(a.label, recs);
-    const cols = checkpoints.map(cp => {
-      const vals = recs.map(r => {
-        const pt = r.valCurve.find(p => p.step === cp);
-        return pt ? pt.valLoss : NaN;
-      });
-      return fmt(mean(vals));
-    });
-    console.log(`| ${lbl} | ${a.code} | ${cols.slice(0, 6).join(' | ')} | **${cols[6]}** |`);
-  }
-  console.log('');
-}
-
-if (secArg === 'all' || secArg === 'tier2') printTier2MainTable();
-if (secArg === 'all' || secArg === 'tier2_diag') printTier2DiagTable();
-if (secArg === 'all' || secArg === 'tier2_traj') printTier2TrajectoryTable();
-if (secArg === 'all' || secArg === 'tier2_lr') printTier2LRSweepTable();
-if (secArg === 'all' || secArg === 'tier3') printTier3Tables();
+console.log(out.join('\n'));

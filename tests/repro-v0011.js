@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Legacy bit-identity verification test for LEARNS v0.0015:
+// Legacy bit-identity verification test for LEARNS v0.0016:
 // 1. Proves that the explicit v0.0011/v0.0012 configuration:
 //      dim=32;layers=2;chunk=64;lr=0.004;fpNorm=layernorm;fpInject=off;helixState=shared;scoutScale=0.5;ema=off
 //    with --stream=head reproduces v0.0011 and v0.0012 bit-for-bit on corpus.txt across all 40 steps
